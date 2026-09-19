@@ -98,7 +98,7 @@ Post note ke tiket FreeScout + simpan konteks di DB plugin
 
 ### Strategi fork (keputusan 2026-09-20, final)
 
-- Repo `bb/` = fork `rizaardiyanto1412/bb`, branch kerja **`repile`**. Snapshot penuh dari upstream. Remote upstream dihapus agar tidak ada merge tidak sengaja.
+- Repo `bb/` = fork `rizaardiyanto1412/repile`, branch kerja **`repile`**. Snapshot penuh dari upstream. Remote upstream dihapus agar tidak ada merge tidak sengaja.
 - **Tidak pernah sync upstream.** Semua issue di-fix sendiri. Kebijakan sadar, bukan kelalaian.
 - **Bebas customize core.** Bukan cuma plugin.
 - **CLI provider di-pin versinya** (`codex 0.155.1`, `claude-code 2.1.278`) agar tidak berubah di bawah kaki. Upgrade disengaja, bukan otomatis.
@@ -273,7 +273,7 @@ Internet → Cloudflare Access (auth) → Caddy (TLS) → :38886 bb server (app 
 | **Fase 0 (dev lokal)** | Branding pass bb→repile di `bb/`, struktur fork tipis, repo plugin `repile-*` skeleton | TODO |
 | **Fase 0.5 (dogfood)** | Provisioning VPS pertama: clone+build fork, CF Access, claude/codex CLI, install plugins | PARTIAL 2026-09-19: VPS Debian 13 (2 vCPU/3 GB) live. `/opt/repile/bb` branch `repile` build 50/50 OK. `repile.service` systemd aktif, Caddy :80 + basic auth (user `riza`, password di `/root/.repile-basic-auth`), public tanpa auth = 401, dengan auth = 200 + `<title>Repile</title>`. Sisa: claude/codex CLI + API key, install plugins, Cloudflare Access ganti basic auth nanti |
 - Domain LIVE 2026-09-20: `repile.rizamaulana.com` A record → VPS (via Erin). Caddy auto-TLS aktif, `https://repile.rizamaulana.com` tanpa auth = 401, dengan auth = 200 + `<title>Repile</title>`. Sertifikat valid.
-- Deploy pipeline LIVE 2026-09-20: repo `rizaardiyanto1412/repile` (plugins + provisioning + workflow) push to main → Action SSH → `update.sh` (pull fork + build + reinstall plugins + restart). Deploy keys per repo aktif. Fork di `rizaardiyanto1412/bb` branch `repile`.
+- Deploy pipeline LIVE 2026-09-20: repo `rizaardiyanto1412/repile` (plugins + provisioning + workflow) push to main → Action SSH → `update.sh` (pull fork + build + reinstall plugins + restart). Deploy keys per repo aktif. Fork di `rizaardiyanto1412/repile` branch `repile`.
 | **MVP** | Plugin connector FreeScout, triage bug/non-bug, HITL review queue, note write-back, SandyWP connect + replicate, $149 bundle | TODO |
 | **v1** | Freshdesk + Thrivedesk connector, botch mode polish, auth gateway + multi-seat billing, auto-write-back setting | TODO |
 | **v1.x** | Konektor tambahan, confidence gates, analytics triage | TODO |

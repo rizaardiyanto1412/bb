@@ -6,7 +6,7 @@ set -euo pipefail
 
 DOMAIN="${DOMAIN:?set DOMAIN}"
 BASIC_USER="${BASIC_USER:-riza}"
-BB_FORK="${BB_FORK:-bb-gh:rizaardiyanto1412/bb.git}"
+BB_FORK="${BB_FORK:-bb-gh:rizaardiyanto1412/repile.git}"
 BB_BRANCH="${BB_BRANCH:-repile}"
 CODE_DIR="/opt/repile/bb"
 DATA_DIR="/var/lib/repile"

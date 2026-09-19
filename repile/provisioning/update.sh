@@ -9,7 +9,8 @@ DATA_DIR="/var/lib/repile"
 
 cd "$CODE_DIR"
 git remote remove origin 2>/dev/null || true
-git fetch fork "$BB_BRANCH" --depth 50
+git remote set-url fork bb-gh:rizaardiyanto1412/repile.git 2>/dev/null || git remote add fork bb-gh:rizaardiyanto1412/repile.git
+ git fetch fork "$BB_BRANCH" --depth 50
 git checkout "$BB_BRANCH"
 git reset --hard "fork/$BB_BRANCH"
 pnpm install
