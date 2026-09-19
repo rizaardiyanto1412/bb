@@ -96,14 +96,13 @@ Post note ke tiket FreeScout + simpan konteks di DB plugin
 - **Jangan** tarik dependency Electron API ke web client atau server. (Status audit: `apps/app` hanya `import type` dari `@bb/desktop-contract`; runtime pakai `window.bbDesktop` feature-detection.)
 - Lisensi sumber bb: **MIT** — boleh dipakai; simpan notice di repo sumber.
 
-### Strategi fork & upstream sync (keputusan)
+### Strategi fork (keputusan 2026-09-20, final)
 
-- Repo `bb/` = **clone git** `git@github.com:get-bb/bb.git` (2026-09-19): remote `origin` → upstream, branch kerja **`repile`** di HEAD `c1a64f4` (v0.43.3), tree clean. Update upstream: `git fetch origin && git merge origin/main`.
-- Merge upstream per release tag berkala; konflik hanya di file yang kita sentuh → diff setipis mungkin.
-- **Branding** ("bb"→"repile") hardcoded di app shell (`index.html` title/PWA, logo, nama package) — butuh fork patch, tidak bisa via plugin/config. Terkonsentrasi: index.html + package.json names + assets.
-- **Plugin Repile di repo terpisah**, install ke instance via source `git:`/`path:` saat provisioning → fork tinggal patch branding murni, merge upstream hampir tanpa konflik.
-- Update upstream: pilih sendiri kapan absorb (per tag), test build lokal, baru roll ke VPS. bb masih 0.x cepat bergerak → pin tag + test sebelum deploy.
-- bb repo punya `patches/` (pnpm patches) — preseden pola upstream-murni + patch.
+- Repo `bb/` = fork `rizaardiyanto1412/bb`, branch kerja **`repile`**. Snapshot penuh dari upstream. Remote upstream dihapus agar tidak ada merge tidak sengaja.
+- **Tidak pernah sync upstream.** Semua issue di-fix sendiri. Kebijakan sadar, bukan kelalaian.
+- **Bebas customize core.** Bukan cuma plugin.
+- **CLI provider di-pin versinya** (`codex 0.155.1`, `claude-code 2.1.278`) agar tidak berubah di bawah kaki. Upgrade disengaja, bukan otomatis.
+- Update file ini di `repo/docs/repile-plan.md` bila keputusan berubah. Salinan lokal di folder ini bisa tertinggal.
 
 ### Urutan develop (keputusan)
 
@@ -274,6 +273,7 @@ Internet → Cloudflare Access (auth) → Caddy (TLS) → :38886 bb server (app 
 | **Fase 0 (dev lokal)** | Branding pass bb→repile di `bb/`, struktur fork tipis, repo plugin `repile-*` skeleton | TODO |
 | **Fase 0.5 (dogfood)** | Provisioning VPS pertama: clone+build fork, CF Access, claude/codex CLI, install plugins | PARTIAL 2026-09-19: VPS Debian 13 (2 vCPU/3 GB) live. `/opt/repile/bb` branch `repile` build 50/50 OK. `repile.service` systemd aktif, Caddy :80 + basic auth (user `riza`, password di `/root/.repile-basic-auth`), public tanpa auth = 401, dengan auth = 200 + `<title>Repile</title>`. Sisa: claude/codex CLI + API key, install plugins, Cloudflare Access ganti basic auth nanti |
 - Domain LIVE 2026-09-20: `repile.rizamaulana.com` A record → VPS (via Erin). Caddy auto-TLS aktif, `https://repile.rizamaulana.com` tanpa auth = 401, dengan auth = 200 + `<title>Repile</title>`. Sertifikat valid.
+- Deploy pipeline LIVE 2026-09-20: repo `rizaardiyanto1412/repile` (plugins + provisioning + workflow) push to main → Action SSH → `update.sh` (pull fork + build + reinstall plugins + restart). Deploy keys per repo aktif. Fork di `rizaardiyanto1412/bb` branch `repile`.
 | **MVP** | Plugin connector FreeScout, triage bug/non-bug, HITL review queue, note write-back, SandyWP connect + replicate, $149 bundle | TODO |
 | **v1** | Freshdesk + Thrivedesk connector, botch mode polish, auth gateway + multi-seat billing, auto-write-back setting | TODO |
 | **v1.x** | Konektor tambahan, confidence gates, analytics triage | TODO |
@@ -298,7 +298,7 @@ Internet → Cloudflare Access (auth) → Caddy (TLS) → :38886 bb server (app 
 - [x] Harga MVP: **$149/bulan include SandyWP Plus 10 sandbox**, auto-create akun
 - [x] Audit Plugin SDK: semua kebutuhan tercover (lihat §4)
 - [x] Urutan develop: lokal dulu (branding+fork) → provisioning clone+build → npm publish nanti (opsional)
-- [x] Upstream sync: fork tipis = patch branding saja; plugins repo terpisah; merge per release tag
+- [x] Upstream sync: remote upstream disimpan sebagai pintu darurat, sync hanya on demand via cherry-pick (revisi 2026-09-20, dulu per tag)
 
 ### Belum diputuskan / belum dikerjakan
 
@@ -358,4 +358,4 @@ Internet → Cloudflare Access (auth) → Caddy (TLS) → :38886 bb server (app 
 
 ---
 
-*Dokumen ini sumber kebenaran Repile. Update saat keputusan produk diambil atau verifikasi baru selesai.*
+*Dokumen ini sumber kebenaran Repile. Update saat keputusan produk
