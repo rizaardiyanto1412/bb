@@ -116,7 +116,7 @@ export function RootComposeEmptyWelcome({
       </svg>
       <div
         role="img"
-        aria-label="bb"
+        aria-label="Repile"
         className="h-24 w-28 select-none"
         style={{ filter: "url(#bb-gloss)" }}
       >
