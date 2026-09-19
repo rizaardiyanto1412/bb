@@ -1,0 +1,25 @@
+name: deploy-repile
+
+on:
+  push:
+    branches: [repile]
+    paths-ignore:
+      - "**.md"
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+        with:
+          ref: repile
+          fetch-depth: 50
+      - name: Set up SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.VPS_SSH_KEY }}
+      - name: Run update on VPS
+        run: |
+          ssh -o StrictHostKeyChecking=accept-new \
+            root@${{ secrets.VPS_HOST }} 'bash -s' < repile/provisioning/update.sh

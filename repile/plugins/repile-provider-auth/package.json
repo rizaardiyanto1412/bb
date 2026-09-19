@@ -1,0 +1,41 @@
+{
+  "name": "bb-plugin-repile-provider-auth",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Sign the Claude and Codex CLIs in from bb Settings with a browser-based token login flow.",
+  "engines": {
+    "bb": ">=0.43.0",
+    "bbPluginSdk": ">=0.4.106"
+  },
+  "bb": {
+    "name": "Provider login",
+    "description": "Sign the Claude and Codex CLIs in from bb Settings with a browser-based token login flow.",
+    "branding": {
+      "icon": "KeyRound"
+    },
+    "server": "./server.ts",
+    "app": "./app.tsx"
+  },
+  "keywords": [
+    "bb-plugin"
+  ],
+  "scripts": {
+    "test": "vitest run --config vitest.config.ts",
+    "typecheck": "tsc --noEmit",
+    "prepare:bundled": "bb-plugin-build prepare-bundled"
+  },
+  "dependencies": {
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@get-bb/plugin-sdk": "^0.4.106",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.1"
+  }
+}
