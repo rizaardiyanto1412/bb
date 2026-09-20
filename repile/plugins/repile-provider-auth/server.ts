@@ -45,6 +45,36 @@ const CLAUDE_COMMAND = "claude";
 const CODEX_COMMAND = "codex";
 const CLAUDE_KEYCHAIN_SERVICE = "Claude Code-credentials";
 
+const SETUP_TOKEN_PTY_DRIVER = [
+  "import os, pty, sys, select",
+  "pid, fd = pty.fork()",
+  "if pid == 0:",
+  "    os.execvp(\"claude\", [\"claude\", \"setup-token\"])",
+  "try:",
+  "    while True:",
+  "        r, _, _ = select.select([fd, sys.stdin.fileno()], [], [])",
+  "        if fd in r:",
+  "            try:",
+  "                data = os.read(fd, 65536)",
+  "            except OSError:",
+  "                break",
+  "            if not data:",
+  "                break",
+  "            os.write(sys.stdout.fileno(), data)",
+  "        if sys.stdin.fileno() in r:",
+  "            data = os.read(sys.stdin.fileno(), 65536)",
+  "            if not data:",
+  "                break",
+  "            os.write(fd, data)",
+  "finally:",
+  "    _, status = os.waitpid(pid, 0)",
+  "    sys.exit(os.waitstatus_to_exitcode(status))",
+].join("\n");
+
+function claudeSetupTokenCommand(): { command: string; args: string[] } {
+  return { command: "python3", args: ["-c", SETUP_TOKEN_PTY_DRIVER] };
+}
+
 interface FlowSession {
   record: LoginSession;
   child: ChildProcess | null;
@@ -69,8 +99,12 @@ function stopChild(child: ChildProcess | null): void {
   if (child === null || child.exitCode !== null || child.signalCode !== null)
     return;
   try {
-    child.kill("SIGKILL");
-  } catch {}
+    process.kill(-Number(child.pid), "SIGKILL");
+  } catch {
+    try {
+      child.kill("SIGKILL");
+    } catch {}
+  }
 }
 
 function appendOutput(session: FlowSession, chunk: string): void {
@@ -297,10 +331,12 @@ export default async function plugin(bb: BbPluginApi) {
     const current = await readClaudeStatus();
     if (current.loggedIn) return storeTerminal("claude", "completed", null);
     stopChild(sessions.get("claude")?.child ?? null);
+    const setup = claudeSetupTokenCommand();
     let child: ChildProcess;
     try {
-      child = spawn(CLAUDE_COMMAND, ["setup-token"], {
+      child = spawn(setup.command, setup.args, {
         stdio: ["pipe", "pipe", "pipe"],
+        detached: true,
       });
     } catch (error) {
       return failStale(
@@ -431,6 +467,7 @@ export default async function plugin(bb: BbPluginApi) {
     try {
       child = spawn(CODEX_COMMAND, ["login", "--with-api-key"], {
         stdio: ["pipe", "pipe", "pipe"],
+        detached: true,
       });
     } catch (error) {
       return failStale(

@@ -76,8 +76,30 @@ export type AuthChangedPayload = z.infer<typeof authChangedPayloadSchema>;
 
 const AUTHORIZE_URL_PATTERN = /https?:\/\/[^\s"'<>\\]+/u;
 
+const CSI_PATTERN = /\u001B\[[0-9;?]*[ -/]*[@-~]/gu;
+const OSC_OPEN_PATTERN = /\u001B\]8;[^;]*;/gu;
+const OSC_CLOSE_PATTERN = /\u001B\]8;;(?:\u0007|\u001B\\)/gu;
+const BELL_PATTERN = /\u0007/gu;
+
+export function stripAnsi(output: string): string {
+  return output
+    .replace(OSC_OPEN_PATTERN, "")
+    .replace(OSC_CLOSE_PATTERN, "")
+    .replace(CSI_PATTERN, "")
+    .replace(BELL_PATTERN, "");
+}
+
+function dedupeDoubledUrl(url: string): string {
+  const half = url.length / 2;
+  if (Number.isInteger(half) && url.slice(0, half) === url.slice(half)) {
+    return url.slice(0, half);
+  }
+  return url;
+}
+
 export function extractAuthorizeUrl(output: string): string | null {
-  return AUTHORIZE_URL_PATTERN.exec(output)?.[0] ?? null;
+  const found = AUTHORIZE_URL_PATTERN.exec(stripAnsi(output))?.[0] ?? null;
+  return found === null ? null : dedupeDoubledUrl(found);
 }
 
 const claudeCredentialsFileSchema = z.object({

@@ -7,6 +7,7 @@ import {
   lastOutputLine,
   parseClaudeAccountEmail,
   parseClaudeCredentialsFile,
+  stripAnsi,
 } from "./contract.js";
 
 function unsignedJwt(payload: Record<string, unknown>): string {
@@ -26,6 +27,16 @@ describe("extractAuthorizeUrl", () => {
 
   it("returns null when no URL was printed", () => {
     expect(extractAuthorizeUrl("still starting…\n")).toBeNull();
+  });
+
+  it("finds the URL inside Ink TUI escape sequences", () => {
+    const framed =
+      "\u001B[38;5;246mBrowser didnt open? Use the url below\u001B[39m\n" +
+      "\u001B]8;id=x;https://claude.ai/setup-token/tty-1\u0007https://claude.ai/setup-token/tty-1\u001B]8;;\u0007\n";
+    expect(stripAnsi(framed)).not.toContain("\u001B");
+    expect(extractAuthorizeUrl(framed)).toBe(
+      "https://claude.ai/setup-token/tty-1",
+    );
   });
 });
 
