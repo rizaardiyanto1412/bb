@@ -13,7 +13,7 @@ DATA_DIR="/var/lib/repile"
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
-apt-get install -y git build-essential python3 curl openssl \
+apt-get install -y git build-essential python3 curl openssl bubblewrap \
   debian-keyring debian-archive-keyring apt-transport-https
 
 curl -fsSL https://deb.nodesource.com/setup_24.x | bash -

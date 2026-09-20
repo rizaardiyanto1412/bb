@@ -7,6 +7,9 @@ BB_BRANCH="${BB_BRANCH:-main}"
 CODE_DIR="/opt/repile/bb"
 DATA_DIR="/var/lib/repile"
 
+export DEBIAN_FRONTEND=noninteractive
+apt-get install -y bubblewrap
+
 cd "$CODE_DIR"
 git remote remove origin 2>/dev/null || true
 git remote set-url fork bb-gh:rizaardiyanto1412/repile.git 2>/dev/null || git remote add fork bb-gh:rizaardiyanto1412/repile.git
