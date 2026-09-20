@@ -14,7 +14,6 @@ jobs:
       - name: Check out repo
         uses: actions/checkout@v4
         with:
-          ref: repile
           fetch-depth: 50
       - name: Set up SSH
         uses: webfactory/ssh-agent@v0.9.0
