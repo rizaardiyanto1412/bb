@@ -382,7 +382,7 @@ function ProviderAuthSettings() {
                     disabled={row.busy || row.secret.trim().length === 0}
                     className="rounded-md border border-border px-3 py-1.5 text-sm disabled:opacity-50"
                   >
-                    Submit
+                    {row.busy ? "Working…" : "Submit"}
                   </button>
                   <button
                     type="button"

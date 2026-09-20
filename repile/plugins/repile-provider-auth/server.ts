@@ -238,6 +238,20 @@ async function readStatus(provider: ProviderId): Promise<ProviderStatus> {
   return provider === "claude" ? readClaudeStatus() : readCodexStatus();
 }
 
+async function pollClaudeCredentials(
+  child: ChildProcess,
+  timeoutMs: number,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const status = await readClaudeStatus();
+    if (status.loggedIn) return true;
+    if (child.exitCode !== null) return false;
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+  }
+  return false;
+}
+
 function waitForClose(
   child: ChildProcess,
   timeoutMs: number,
@@ -402,11 +416,15 @@ export default async function plugin(bb: BbPluginApi) {
         error instanceof Error ? error.message : String(error),
       );
     }
-    const { exitCode, timedOut } = await waitForClose(
-      child,
-      LOGIN_EXIT_TIMEOUT_MS,
-    );
+    const [closeResult, credentialAppeared] = await Promise.all([
+      waitForClose(child, LOGIN_EXIT_TIMEOUT_MS),
+      pollClaudeCredentials(child, LOGIN_EXIT_TIMEOUT_MS),
+    ]);
+    const { exitCode, timedOut } = closeResult;
     const redacted = redactSecret(session.output, token);
+    if (credentialAppeared) {
+      return storeTerminal("claude", "completed", null);
+    }
     if (timedOut) {
       return failStale("claude", "claude setup-token timed out");
     }
