@@ -25,6 +25,7 @@ import {
   providerStatusSchema,
   ROUTES,
   startRequestSchema,
+  stripAnsi,
   type AuthChangedPayload,
   type LoginSession,
   type LoginSessionState,
@@ -41,6 +42,8 @@ const TERMINAL_SESSION_TTL_MS = 5 * 60_000;
 const PRUNE_INTERVAL_MS = 30_000;
 const CHILD_OUTPUT_MAX_CHARS = 64_000;
 const ERROR_DETAIL_MAX_CHARS = 300;
+const AUTH_FAILURE_PATTERN =
+  /oauth error|press enter to retry|request failed|invalid grant/iu;
 
 const CLAUDE_COMMAND = "claude";
 const CODEX_COMMAND = "codex";
@@ -118,7 +121,7 @@ function redactSecret(output: string, secret: string): string {
 }
 
 function childErrorDetail(output: string, exitCode: number | null): string {
-  const detail = lastOutputLine(output, ERROR_DETAIL_MAX_CHARS);
+  const detail = lastOutputLine(stripAnsi(output), ERROR_DETAIL_MAX_CHARS);
   if (detail !== null) return detail;
   return exitCode === null ? "login process ended" : `exit code ${exitCode}`;
 }
@@ -273,6 +276,36 @@ function waitForClose(
   });
 }
 
+function watchAuthFailure(
+  session: FlowSession,
+  timeoutMs: number,
+): Promise<string | null> {
+  return new Promise((resolve) => {
+    const deadline = Date.now() + timeoutMs;
+    const check = (): void => {
+      const failedLine = stripAnsi(session.output)
+        .split(/\r?\n/u)
+        .map((line) => line.trim())
+        .find((line) => AUTH_FAILURE_PATTERN.test(line));
+      if (failedLine !== undefined) {
+        resolve(
+          failedLine.length > ERROR_DETAIL_MAX_CHARS
+            ? `${failedLine.slice(0, ERROR_DETAIL_MAX_CHARS - 1)}…`
+            : failedLine,
+        );
+        return;
+      }
+      if (Date.now() >= deadline) {
+        resolve(null);
+        return;
+      }
+      const timer = setTimeout(check, 500);
+      timer.unref();
+    };
+    check();
+  });
+}
+
 function waitForSetupTokenUrl(
   child: ChildProcess,
   session: FlowSession,
@@ -418,19 +451,43 @@ export default async function plugin(bb: BbPluginApi) {
     ) {
       return failStale("claude", "start a Claude login flow first");
     }
+    const capture = (chunk: Buffer | string): void => {
+      appendOutput(session, chunk.toString());
+    };
+    child.stdout?.on("data", capture);
+    child.stderr?.on("data", capture);
     try {
-      child.stdin.write(`${token}\n`);
-      child.stdin.end();
+      child.stdin.write(`${token}\r`);
     } catch (error) {
       return failStale(
         "claude",
         error instanceof Error ? error.message : String(error),
       );
     }
-    const [closeResult, credentialAppeared] = await Promise.all([
+    const settledPromise = Promise.all([
       waitForClose(child, LOGIN_EXIT_TIMEOUT_MS),
       pollClaudeCredentials(child, LOGIN_EXIT_TIMEOUT_MS),
-    ]);
+    ]).then(([closeResult, credentialAppeared]) => ({
+      kind: "settled" as const,
+      closeResult,
+      credentialAppeared,
+    }));
+    const rejectedPromise = watchAuthFailure(
+      session,
+      LOGIN_EXIT_TIMEOUT_MS,
+    ).then((line) => ({ kind: "rejected" as const, line }));
+    const outcome = await Promise.race([settledPromise, rejectedPromise]);
+    if (outcome.kind === "rejected" && outcome.line !== null) {
+      bb.log.info(
+        `provider-auth claude code rejected elapsedMs=${String(Date.now() - startedAt)}`,
+      );
+      return failStale(
+        "claude",
+        `Claude rejected that code (${outcome.line}). Start a new login for a fresh link.`,
+      );
+    }
+    const { closeResult, credentialAppeared } =
+      outcome.kind === "settled" ? outcome : await settledPromise;
     const { exitCode, timedOut } = closeResult;
     bb.log.info(
       `provider-auth claude setup-token exited code=${String(exitCode)} timedOut=${String(timedOut)} elapsedMs=${String(Date.now() - startedAt)}`,
