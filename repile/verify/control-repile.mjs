@@ -18,9 +18,9 @@ import { fileURLToPath } from "node:url";
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const VERIFY_ROOT = dirname(SCRIPT_PATH);
 const REPO_ROOT = dirname(dirname(dirname(SCRIPT_PATH)));
-const PLUGIN_ID = "repile-provider-auth";
-const PLUGIN_PATH = join(REPO_ROOT, "repile", "plugins", PLUGIN_ID);
-const HTTP_BASE_PATH = `/api/v1/plugins/${PLUGIN_ID}/http`;
+const CLAUDE_PLUGIN_ID = "provider-claude-code";
+const CODEX_PLUGIN_ID = "provider-codex";
+const BUNDLED_PLUGIN_IDS = [CLAUDE_PLUGIN_ID, CODEX_PLUGIN_ID];
 const INVALID_SECRET = "repile-verify-invalid-key";
 const THREAD_CONTEXT_KEYS = [
   "BB_ENVIRONMENT_ID",
@@ -43,11 +43,10 @@ function usage() {
     "Commands:",
     "  launch          Start an isolated server + app stack for verification",
     "  doctor          Read-only health check of a launched stack",
-    "  install-plugin  Install repile-provider-auth on the launched stack",
-    "  drive-auth      Exercise provider-auth without human OAuth",
+    "  drive-auth      Exercise provider subscription login without human OAuth",
     "  cleanup         Stop launched processes, keep proof artifacts",
     "  vps-doctor      Read-only health check of the production VPS",
-    "  vps-drive-auth  Exercise provider-auth on the VPS, no real secrets",
+    "  vps-drive-auth  Exercise subscription login on the VPS, no real secrets",
     "",
     "Options:",
     "  --state <path>  Path to run.json (or set REPILE_VERIFY_STATE)",
@@ -80,7 +79,9 @@ function parseArgs(argv) {
 function resolveStatePath(explicit) {
   const found = explicit ?? process.env.REPILE_VERIFY_STATE ?? null;
   if (found === null) {
-    throw new Error("no state file: pass --state <path-to-run.json> or set REPILE_VERIFY_STATE");
+    throw new Error(
+      "no state file: pass --state <path-to-run.json> or set REPILE_VERIFY_STATE",
+    );
   }
   return found;
 }
@@ -101,7 +102,8 @@ function freePort() {
     server.once("error", rejectPromise);
     server.listen(0, "127.0.0.1", () => {
       const address = server.address();
-      const port = typeof address === "object" && address !== null ? address.port : null;
+      const port =
+        typeof address === "object" && address !== null ? address.port : null;
       server.close((error) => {
         if (error) {
           rejectPromise(error);
@@ -163,7 +165,9 @@ async function waitFor(label, check, timeoutMs) {
     }
     await sleep(1000);
   }
-  throw new Error(`${label} not ready within ${timeoutMs}ms (last: ${lastError})`);
+  throw new Error(
+    `${label} not ready within ${timeoutMs}ms (last: ${lastError})`,
+  );
 }
 
 function pidAlive(pid) {
@@ -171,7 +175,12 @@ function pidAlive(pid) {
     process.kill(pid, 0);
     return true;
   } catch (error) {
-    return error !== null && typeof error === "object" && "code" in error && error.code === "EPERM";
+    return (
+      error !== null &&
+      typeof error === "object" &&
+      "code" in error &&
+      error.code === "EPERM"
+    );
   }
 }
 
@@ -210,7 +219,13 @@ function runCli(args, state, timeoutMs) {
   return new Promise((resolvePromise) => {
     const child = spawn(
       process.execPath,
-      ["--conditions=source", "--import", "tsx", "apps/cli/src/index.ts", ...args],
+      [
+        "--conditions=source",
+        "--import",
+        "tsx",
+        "apps/cli/src/index.ts",
+        ...args,
+      ],
       {
         cwd: REPO_ROOT,
         env: cleanEnv({
@@ -240,7 +255,12 @@ function runCli(args, state, timeoutMs) {
     });
     child.on("error", (error) => {
       clearTimeout(timer);
-      resolvePromise({ exitCode: null, stdout, stderr: `${stderr}${error.message}`, timedOut });
+      resolvePromise({
+        exitCode: null,
+        stdout,
+        stderr: `${stderr}${error.message}`,
+        timedOut,
+      });
     });
     child.on("close", (code) => {
       clearTimeout(timer);
@@ -285,7 +305,12 @@ async function cmdLaunch(root) {
   const serverChild = spawn(
     process.execPath,
     ["--conditions=source", "--import", "tsx", "apps/server/src/index.ts"],
-    { cwd: REPO_ROOT, env: serverEnv, detached: true, stdio: ["ignore", serverFd, serverFd] },
+    {
+      cwd: REPO_ROOT,
+      env: serverEnv,
+      detached: true,
+      stdio: ["ignore", serverFd, serverFd],
+    },
   );
   serverChild.on("exit", (code, signal) => {
     earlyExit.server = { code, signal };
@@ -298,7 +323,13 @@ async function cmdLaunch(root) {
   });
   const appChild = spawn(
     process.execPath,
-    ["../app/node_modules/vite/bin/vite.js", "--config", "vite.dev.config.ts", "--configLoader", "runner"],
+    [
+      "../app/node_modules/vite/bin/vite.js",
+      "--config",
+      "vite.dev.config.ts",
+      "--configLoader",
+      "runner",
+    ],
     {
       cwd: join(REPO_ROOT, "apps", "app"),
       env: appEnv,
@@ -329,52 +360,88 @@ async function cmdLaunch(root) {
     appPid: appChild.pid ?? null,
     serverLog,
     appLog,
-    pluginId: PLUGIN_ID,
-    pluginPath: PLUGIN_PATH,
+    pluginIds: BUNDLED_PLUGIN_IDS,
     launchedAt: new Date().toISOString(),
   };
   const statePath = join(proofDir, "run.json");
   writeJson(statePath, state);
-  writeText(join(proofDir, "urls.txt"), `App ${appUrl}\nServer ${serverUrl}\nData ${dataDir}\n`);
+  writeText(
+    join(proofDir, "urls.txt"),
+    `App ${appUrl}\nServer ${serverUrl}\nData ${dataDir}\n`,
+  );
   try {
-    const health = await waitFor("server /health", async () => {
-      const extra = earlyExit.server === null ? "" : ` (server exited: ${JSON.stringify(earlyExit.server)})`;
-      const result = await fetchJson(`${serverUrl}/health`, {}, 5000);
-      if (result.status === 200 && result.body !== null && result.body.ok === true) {
-        return { ok: true, value: result.body };
-      }
-      return { ok: false, detail: `HTTP ${result.status}${extra}` };
-    }, SERVER_READY_TIMEOUT_MS);
+    const health = await waitFor(
+      "server /health",
+      async () => {
+        const extra =
+          earlyExit.server === null
+            ? ""
+            : ` (server exited: ${JSON.stringify(earlyExit.server)})`;
+        const result = await fetchJson(`${serverUrl}/health`, {}, 5000);
+        if (
+          result.status === 200 &&
+          result.body !== null &&
+          result.body.ok === true
+        ) {
+          return { ok: true, value: result.body };
+        }
+        return { ok: false, detail: `HTTP ${result.status}${extra}` };
+      },
+      SERVER_READY_TIMEOUT_MS,
+    );
     writeJson(join(proofDir, "health.json"), health);
-    const appBody = await waitFor("app /", async () => {
-      const extra = earlyExit.app === null ? "" : ` (app exited: ${JSON.stringify(earlyExit.app)})`;
-      const response = await fetch(appUrl, { signal: AbortSignal.timeout(5000) });
-      const text = await response.text();
-      if (response.status === 200 && text.includes("<title>Repile</title>")) {
-        return { ok: true, value: text };
-      }
-      return { ok: false, detail: `HTTP ${response.status}${extra}` };
-    }, APP_READY_TIMEOUT_MS);
+    const appBody = await waitFor(
+      "app /",
+      async () => {
+        const extra =
+          earlyExit.app === null
+            ? ""
+            : ` (app exited: ${JSON.stringify(earlyExit.app)})`;
+        const response = await fetch(appUrl, {
+          signal: AbortSignal.timeout(5000),
+        });
+        const text = await response.text();
+        if (response.status === 200 && text.includes("<title>Repile</title>")) {
+          return { ok: true, value: text };
+        }
+        return { ok: false, detail: `HTTP ${response.status}${extra}` };
+      },
+      APP_READY_TIMEOUT_MS,
+    );
     writeText(join(proofDir, "app-head.html"), appBody.slice(0, 4000));
   } catch (error) {
     state.launchError = error instanceof Error ? error.message : String(error);
     writeJson(statePath, state);
     throw error;
   }
-  process.stdout.write(`App ${appUrl}\nServer ${serverUrl}\nData ${dataDir}\nState ${statePath}\nProof ${proofDir}\n`);
+  process.stdout.write(
+    `App ${appUrl}\nServer ${serverUrl}\nData ${dataDir}\nState ${statePath}\nProof ${proofDir}\n`,
+  );
   return statePath;
 }
 
 async function cmdDoctor(state, statePath) {
-  const report = { state: statePath, serverUrl: state.serverUrl, appUrl: state.appUrl, checks: [] };
+  const report = {
+    state: statePath,
+    serverUrl: state.serverUrl,
+    appUrl: state.appUrl,
+    checks: [],
+  };
   const health = await fetchJson(`${state.serverUrl}/health`, {}, 10000);
-  const healthOk = health.status === 200 && health.body !== null && health.body.ok === true;
-  report.checks.push({ name: "server-health", pass: healthOk, detail: `HTTP ${health.status}` });
+  const healthOk =
+    health.status === 200 && health.body !== null && health.body.ok === true;
+  report.checks.push({
+    name: "server-health",
+    pass: healthOk,
+    detail: `HTTP ${health.status}`,
+  });
   report.health = health.body;
   let titleOk = false;
   let titleDetail = "";
   try {
-    const response = await fetch(state.appUrl, { signal: AbortSignal.timeout(10000) });
+    const response = await fetch(state.appUrl, {
+      signal: AbortSignal.timeout(10000),
+    });
     const text = await response.text();
     titleOk = response.status === 200 && text.includes("<title>Repile</title>");
     titleDetail = `HTTP ${response.status}`;
@@ -384,39 +451,47 @@ async function cmdDoctor(state, statePath) {
   report.checks.push({ name: "app-title", pass: titleOk, detail: titleDetail });
   const listed = await runCli(["plugin", "list", "--json"], state, 60000);
   writeText(join(state.proofDir, "doctor-plugin-list.json"), listed.stdout);
-  let pluginSeen = false;
+  const missing = [];
   let pluginDetail = `exit ${String(listed.exitCode)}`;
   try {
     const parsed = JSON.parse(listed.stdout);
     const candidates = Array.isArray(parsed) ? parsed : (parsed.plugins ?? []);
-    const entry = Array.isArray(candidates) ? candidates.find((item) => item !== null && typeof item === "object" && "id" in item && item.id === PLUGIN_ID) : null;
-    if (entry !== null && entry !== undefined) {
-      pluginSeen = true;
-      pluginDetail = `id ${PLUGIN_ID} status ${String(entry.status ?? "unknown")}`;
-    } else if (listed.stdout.includes(PLUGIN_ID)) {
-      pluginSeen = true;
-      pluginDetail = "id present in output (unstructured match)";
+    const ids = new Set(
+      Array.isArray(candidates)
+        ? candidates
+            .filter(
+              (item) =>
+                item !== null && typeof item === "object" && "id" in item,
+            )
+            .map((item) => String(item.id))
+        : [],
+    );
+    for (const id of BUNDLED_PLUGIN_IDS) {
+      if (!ids.has(id) && !listed.stdout.includes(id)) missing.push(id);
     }
+    pluginDetail =
+      missing.length === 0
+        ? "bundled provider plugins present"
+        : `missing ${missing.join(",")}`;
   } catch {
-    pluginSeen = listed.stdout.includes(PLUGIN_ID);
-    pluginDetail = pluginSeen ? "id present in output (unparsed match)" : `unparseable output exit ${String(listed.exitCode)}`;
+    for (const id of BUNDLED_PLUGIN_IDS) {
+      if (!listed.stdout.includes(id)) missing.push(id);
+    }
+    pluginDetail =
+      missing.length === 0
+        ? "ids present in output (unparsed match)"
+        : `missing ${missing.join(",")} (unparsed, exit ${String(listed.exitCode)})`;
   }
-  report.checks.push({ name: "plugin-installed", pass: pluginSeen, detail: pluginDetail });
+  report.checks.push({
+    name: "provider-plugins-installed",
+    pass: missing.length === 0,
+    detail: pluginDetail,
+  });
   report.pass = report.checks.every((check) => check.pass);
   writeJson(join(state.proofDir, "doctor.json"), report);
   process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
   if (!report.pass) {
     throw new Error("doctor failed");
-  }
-}
-
-async function cmdInstallPlugin(state) {
-  const result = await runCli(["plugin", "install", "--yes", `path:${state.pluginPath}`], state, CLI_TIMEOUT_MS);
-  writeText(join(state.proofDir, "install-plugin.txt"), `$ bb plugin install --yes path:${state.pluginPath}\nexit ${String(result.exitCode)} timedOut ${String(result.timedOut)}\n--- stdout ---\n${result.stdout}\n--- stderr ---\n${result.stderr}\n`);
-  process.stdout.write(result.stdout);
-  if (result.exitCode !== 0) {
-    process.stderr.write(result.stderr);
-    throw new Error(`plugin install failed with exit ${String(result.exitCode)}`);
   }
 }
 
@@ -427,7 +502,6 @@ function checkRecord(checks, name, pass, detail) {
 
 async function cmdDriveAuth(state) {
   const proofDir = state.proofDir;
-  const base = `${state.serverUrl}${HTTP_BASE_PATH}`;
   const jsonHeaders = { "content-type": "application/json" };
   const checks = [];
   let pass = true;
@@ -436,77 +510,248 @@ async function cmdDriveAuth(state) {
       pass = false;
     }
   };
-  const statusOf = async (provider) => fetchJson(`${base}/auth/status?provider=${provider}`, {}, HTTP_TIMEOUT_MS);
-  const claudeStatus = await statusOf("claude");
+  const rpc = (pluginId, method, input) =>
+    fetchJson(
+      `${state.serverUrl}/api/v1/plugins/${pluginId}/rpc/${method}`,
+      {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify(input ?? null),
+      },
+      HTTP_TIMEOUT_MS,
+    );
+  const rpcError = (result) =>
+    result.body !== null &&
+    typeof result.body === "object" &&
+    typeof result.body.error === "object" &&
+    result.body.error !== null
+      ? String(result.body.error.message ?? "")
+      : "";
+  const rpcOk = (result) =>
+    result.status === 200 &&
+    result.body !== null &&
+    result.body.ok === true &&
+    result.body.result !== null &&
+    typeof result.body.result === "object";
+
+  const claudeStatus = await rpc(CLAUDE_PLUGIN_ID, "subscription.status");
   writeJson(join(proofDir, "status-claude.json"), claudeStatus);
-  note("status-claude", claudeStatus.status === 200 && claudeStatus.body !== null && claudeStatus.body.provider === "claude" && typeof claudeStatus.body.loggedIn === "boolean", `HTTP ${claudeStatus.status} loggedIn ${String(claudeStatus.body?.loggedIn)}`);
-  const codexStatus = await statusOf("codex");
+  note(
+    "status-claude",
+    rpcOk(claudeStatus) &&
+      typeof claudeStatus.body.result.loggedIn === "boolean",
+    `HTTP ${claudeStatus.status} loggedIn ${String(claudeStatus.body?.result?.loggedIn)}`,
+  );
+  const codexStatus = await rpc(CODEX_PLUGIN_ID, "subscription.status");
   writeJson(join(proofDir, "status-codex.json"), codexStatus);
-  note("status-codex", codexStatus.status === 200 && codexStatus.body !== null && codexStatus.body.provider === "codex" && typeof codexStatus.body.loggedIn === "boolean", `HTTP ${codexStatus.status} loggedIn ${String(codexStatus.body?.loggedIn)}`);
-  const startCodex = await fetchJson(`${base}/auth/start`, { method: "POST", headers: jsonHeaders, body: JSON.stringify({ provider: "codex" }) }, HTTP_TIMEOUT_MS);
+  note(
+    "status-codex",
+    rpcOk(codexStatus) && typeof codexStatus.body.result.loggedIn === "boolean",
+    `HTTP ${codexStatus.status} loggedIn ${String(codexStatus.body?.result?.loggedIn)}`,
+  );
+
+  const startCodex = await rpc(CODEX_PLUGIN_ID, "subscription.start");
   writeJson(join(proofDir, "start-codex.json"), startCodex);
-  const codexStartOk = startCodex.status === 200 && startCodex.body !== null && (startCodex.body.state === "awaiting-user" || startCodex.body.state === "completed") && (startCodex.body.state === "completed" || startCodex.body.url === null);
-  note("start-codex", codexStartOk, `HTTP ${startCodex.status} state ${String(startCodex.body?.state)}`);
-  const startClaude = await fetchJson(`${base}/auth/start`, { method: "POST", headers: jsonHeaders, body: JSON.stringify({ provider: "claude" }) }, HTTP_TIMEOUT_MS);
+  const codexStartResult = startCodex.body?.result ?? null;
+  const codexStartOk =
+    rpcOk(startCodex) &&
+    (codexStartResult.state === "completed" ||
+      (codexStartResult.state === "awaiting-user" &&
+        typeof codexStartResult.verificationUri === "string" &&
+        codexStartResult.verificationUri.startsWith("https://") &&
+        typeof codexStartResult.userCode === "string" &&
+        codexStartResult.userCode.length > 0));
+  note(
+    "start-codex",
+    codexStartOk,
+    `HTTP ${startCodex.status} state ${String(codexStartResult?.state)}`,
+  );
+  if (codexStartOk && codexStartResult.state === "awaiting-user") {
+    const pollCodex = await rpc(CODEX_PLUGIN_ID, "subscription.poll", {
+      sessionId: codexStartResult.sessionId,
+    });
+    writeJson(join(proofDir, "poll-codex.json"), pollCodex);
+    const pollState = pollCodex.body?.result?.state;
+    note(
+      "poll-codex",
+      rpcOk(pollCodex) &&
+        (pollState === "pending" ||
+          pollState === "failed" ||
+          pollState === "completed"),
+      `HTTP ${pollCodex.status} state ${String(pollState)}`,
+    );
+    const cancelCodex = await rpc(CODEX_PLUGIN_ID, "subscription.cancel", {
+      sessionId: codexStartResult.sessionId,
+    });
+    writeJson(join(proofDir, "cancel-codex.json"), cancelCodex);
+    note(
+      "cancel-codex",
+      rpcOk(cancelCodex) && cancelCodex.body.result.cancelled === true,
+      `HTTP ${cancelCodex.status}`,
+    );
+  } else {
+    note(
+      "poll-codex",
+      true,
+      "skipped: codex already signed in or start failed",
+    );
+    note("cancel-codex", true, "skipped: no awaiting-user codex flow");
+  }
+
+  const keyLogin = await rpc(CODEX_PLUGIN_ID, "subscription.loginApiKey", {
+    apiKey: INVALID_SECRET,
+  });
+  writeJson(join(proofDir, "login-codex-apikey-invalid.json"), {
+    request: { apiKey: "***redacted***" },
+    status: keyLogin.status,
+    body: keyLogin.body,
+  });
+  note(
+    "login-codex-apikey",
+    rpcOk(keyLogin) &&
+      keyLogin.body.result.loggedIn === true &&
+      keyLogin.body.result.mode === "apiKey",
+    `HTTP ${keyLogin.status} mode ${String(keyLogin.body?.result?.mode)} (codex performs no key validation at login; bad keys fail at first use)`,
+  );
+  const codexKeyStatus = await rpc(CODEX_PLUGIN_ID, "subscription.status");
+  writeJson(join(proofDir, "status-codex-apikey.json"), codexKeyStatus);
+  note(
+    "status-codex-apikey",
+    rpcOk(codexKeyStatus) &&
+      codexKeyStatus.body.result.loggedIn === true &&
+      codexKeyStatus.body.result.mode === "apiKey",
+    `HTTP ${codexKeyStatus.status}`,
+  );
+  const codexLogout = await rpc(CODEX_PLUGIN_ID, "subscription.logout");
+  writeJson(join(proofDir, "logout-codex.json"), codexLogout);
+  note(
+    "logout-codex",
+    rpcOk(codexLogout) && codexLogout.body.result.loggedIn === false,
+    `HTTP ${codexLogout.status}`,
+  );
+
+  const startClaude = await rpc(CLAUDE_PLUGIN_ID, "subscription.start");
   writeJson(join(proofDir, "start-claude.json"), startClaude);
-  const claudeUrl = startClaude.body !== null && typeof startClaude.body === "object" && "url" in startClaude.body ? startClaude.body.url : null;
+  const claudeStartResult = startClaude.body?.result ?? null;
+  const claudeUrl =
+    typeof claudeStartResult?.authorizeUrl === "string"
+      ? claudeStartResult.authorizeUrl
+      : null;
   const claudeStartOk =
-    startClaude.status === 200 &&
-    startClaude.body !== null &&
-    (startClaude.body.state === "completed" ||
-      (startClaude.body.state === "awaiting-user" && typeof claudeUrl === "string" && claudeUrl.startsWith("https://")));
-  note("start-claude", claudeStartOk, `HTTP ${startClaude.status} state ${String(startClaude.body?.state)} urlPresent ${String(typeof claudeUrl === "string")}`);
-  const completeCodex = await fetchJson(`${base}/auth/complete`, { method: "POST", headers: jsonHeaders, body: JSON.stringify({ provider: "codex", tokenOrKey: INVALID_SECRET }) }, HTTP_TIMEOUT_MS);
-  writeJson(join(proofDir, "complete-codex-invalid.json"), { request: { provider: "codex", tokenOrKey: "***redacted***" }, status: completeCodex.status, body: completeCodex.body });
-  note("complete-codex-invalid", completeCodex.status === 200 && completeCodex.body !== null && completeCodex.body.state === "completed", `HTTP ${completeCodex.status} state ${String(completeCodex.body?.state)} (codex performs no key validation at login; bad keys fail at first use)`);
-  if (startClaude.body !== null && startClaude.body.state === "awaiting-user") {
-    const completeClaude = await fetchJson(`${base}/auth/complete`, { method: "POST", headers: jsonHeaders, body: JSON.stringify({ provider: "claude", tokenOrKey: INVALID_SECRET }) }, HTTP_TIMEOUT_MS);
-    writeJson(join(proofDir, "complete-claude-invalid.json"), { request: { provider: "claude", tokenOrKey: "***redacted***" }, status: completeClaude.status, body: completeClaude.body });
-    note("complete-claude-invalid", completeClaude.status === 200 && completeClaude.body !== null && completeClaude.body.state === "failed" && typeof completeClaude.body.error === "string" && completeClaude.body.error.length > 0, `HTTP ${completeClaude.status} state ${String(completeClaude.body?.state)}`);
+    rpcOk(startClaude) &&
+    (claudeStartResult.state === "completed" ||
+      (claudeStartResult.state === "awaiting-user" &&
+        claudeUrl !== null &&
+        claudeUrl.startsWith("https://")));
+  note(
+    "start-claude",
+    claudeStartOk,
+    `HTTP ${startClaude.status} state ${String(claudeStartResult?.state)} urlPresent ${String(claudeUrl !== null)}`,
+  );
+  if (claudeStartOk && claudeStartResult.state === "awaiting-user") {
+    const completeClaude = await rpc(
+      CLAUDE_PLUGIN_ID,
+      "subscription.complete",
+      { sessionId: claudeStartResult.sessionId, code: INVALID_SECRET },
+    );
+    writeJson(join(proofDir, "complete-claude-invalid.json"), {
+      request: { sessionId: "***redacted***", code: "***redacted***" },
+      status: completeClaude.status,
+      body: completeClaude.body,
+    });
+    const failedOk =
+      completeClaude.body !== null &&
+      completeClaude.body.ok === false &&
+      rpcError(completeClaude).length > 0;
+    note(
+      "complete-claude-invalid",
+      failedOk,
+      `HTTP ${completeClaude.status} error ${rpcError(completeClaude).slice(0, 80)}`,
+    );
+    const glued =
+      "repile-verify-code-123https://claude.com/cai/oauth/authorize?code=true";
+    const restartMalformed = await rpc(CLAUDE_PLUGIN_ID, "subscription.start");
+    if (restartMalformed.body?.result?.state === "awaiting-user") {
+      const malformedBegin = Date.now();
+      const malformed = await rpc(CLAUDE_PLUGIN_ID, "subscription.complete", {
+        sessionId: restartMalformed.body.result.sessionId,
+        code: glued,
+      });
+      const malformedElapsed = Date.now() - malformedBegin;
+      writeJson(join(proofDir, "complete-claude-malformed.json"), {
+        request: { code: "***redacted***" },
+        elapsedMs: malformedElapsed,
+        status: malformed.status,
+        body: malformed.body,
+      });
+      note(
+        "complete-claude-malformed",
+        malformed.body !== null &&
+          malformed.body.ok === false &&
+          malformedElapsed < 30000,
+        `HTTP ${malformed.status} elapsedMs ${String(malformedElapsed)}`,
+      );
+    } else {
+      note(
+        "complete-claude-malformed",
+        true,
+        "skipped: no awaiting-user claude flow on restart",
+      );
+    }
+    const restartCancel = await rpc(CLAUDE_PLUGIN_ID, "subscription.start");
+    if (restartCancel.body?.result?.state === "awaiting-user") {
+      const cancelClaude = await rpc(CLAUDE_PLUGIN_ID, "subscription.cancel", {
+        sessionId: restartCancel.body.result.sessionId,
+      });
+      writeJson(join(proofDir, "cancel-claude.json"), cancelClaude);
+      note(
+        "cancel-claude",
+        rpcOk(cancelClaude) && cancelClaude.body.result.cancelled === true,
+        `HTTP ${cancelClaude.status}`,
+      );
+    } else {
+      note(
+        "cancel-claude",
+        true,
+        "skipped: no awaiting-user claude flow on restart",
+      );
+    }
   } else {
-    writeJson(join(proofDir, "complete-claude-invalid.json"), { skipped: "no awaiting-user claude flow (start state: " + String(startClaude.body?.state ?? null) + ")", state: startClaude.body?.state ?? null });
-    note("complete-claude-invalid", true, "skipped: start state " + String(startClaude.body?.state ?? null));
+    writeJson(join(proofDir, "complete-claude-invalid.json"), {
+      skipped: "no awaiting-user claude flow",
+      state: claudeStartResult?.state ?? null,
+    });
+    note(
+      "complete-claude-invalid",
+      true,
+      "skipped: start state " + String(claudeStartResult?.state ?? null),
+    );
+    note(
+      "complete-claude-malformed",
+      true,
+      "skipped: no awaiting-user claude flow",
+    );
+    note("cancel-claude", true, "skipped: no awaiting-user claude flow");
   }
-  const malformedStart = await fetchJson(`${base}/auth/start`, { method: "POST", headers: jsonHeaders, body: JSON.stringify({ provider: "claude" }) }, HTTP_TIMEOUT_MS);
-  if (malformedStart.body !== null && malformedStart.body.state === "awaiting-user") {
-    const glued = "repile-verify-code-123https://claude.com/cai/oauth/authorize?code=true";
-    const malformedBegin = Date.now();
-    const malformed = await fetchJson(`${base}/auth/complete`, { method: "POST", headers: jsonHeaders, body: JSON.stringify({ provider: "claude", tokenOrKey: glued }) }, HTTP_TIMEOUT_MS);
-    const malformedElapsed = Date.now() - malformedBegin;
-    writeJson(join(proofDir, "complete-claude-malformed.json"), { request: { provider: "claude", tokenOrKey: "***redacted***" }, elapsedMs: malformedElapsed, status: malformed.status, body: malformed.body });
-    const malformedMsg = malformed.body !== null && typeof malformed.body.error === "string" ? malformed.body.error : "";
-    note("complete-claude-malformed", malformed.status === 200 && malformed.body !== null && malformed.body.state === "failed" && malformedMsg.includes("only the code") && malformedElapsed < 10000, `HTTP ${malformed.status} elapsedMs ${String(malformedElapsed)}`);
-  } else {
-    note("complete-claude-malformed", true, "skipped: no awaiting-user claude flow");
-  }
-  for (const provider of ["claude", "codex"]) {
-    const cancelled = await fetchJson(`${base}/auth/login?provider=${provider}`, { method: "DELETE", headers: jsonHeaders }, HTTP_TIMEOUT_MS);
-    writeJson(join(proofDir, `cancel-${provider}.json`), cancelled);
-    note(`cancel-${provider}`, cancelled.status === 200 && cancelled.body !== null && cancelled.body.cancelled === true, `HTTP ${cancelled.status}`);
-  }
-  const afterClaude = await statusOf("claude");
+
+  const afterClaude = await rpc(CLAUDE_PLUGIN_ID, "subscription.status");
   writeJson(join(proofDir, "status-after-claude.json"), afterClaude);
-  note("status-after-claude", afterClaude.status === 200, `HTTP ${afterClaude.status}`);
-  const afterCodex = await statusOf("codex");
+  note("status-after-claude", rpcOk(afterClaude), `HTTP ${afterClaude.status}`);
+  const afterCodex = await rpc(CODEX_PLUGIN_ID, "subscription.status");
   writeJson(join(proofDir, "status-after-codex.json"), afterCodex);
-  note("status-after-codex", afterCodex.status === 200, `HTTP ${afterCodex.status}`);
-  const cliStatus = await runCli(["provider-auth", "status"], state, 60000);
-  writeText(join(proofDir, "cli-provider-auth-status.txt"), `$ bb provider-auth status\nexit ${String(cliStatus.exitCode)}\n--- stdout ---\n${cliStatus.stdout}\n--- stderr ---\n${cliStatus.stderr}\n`);
-  const cliTextOk = cliStatus.exitCode === 0 && cliStatus.stdout.includes("claude") && cliStatus.stdout.includes("codex") && !cliStatus.stdout.includes(INVALID_SECRET) && !cliStatus.stderr.includes(INVALID_SECRET);
-  note("cli-provider-auth-status", cliTextOk, `exit ${String(cliStatus.exitCode)}`);
-  const cliJson = await runCli(["provider-auth", "status", "--provider", "codex", "--json"], state, 60000);
-  writeText(join(proofDir, "cli-provider-auth-codex.txt"), `$ bb provider-auth status --provider codex --json\nexit ${String(cliJson.exitCode)}\n--- stdout ---\n${cliJson.stdout}\n--- stderr ---\n${cliJson.stderr}\n`);
-  let cliJsonOk = false;
-  let cliJsonDetail = `exit ${String(cliJson.exitCode)}`;
-  try {
-    const parsed = JSON.parse(cliJson.stdout);
-    cliJsonOk = cliJson.exitCode === 0 && parsed !== null && typeof parsed === "object" && parsed.provider === "codex";
-    cliJsonDetail = `exit ${String(cliJson.exitCode)} provider ${String(parsed.provider)}`;
-  } catch {
-    cliJsonDetail = `exit ${String(cliJson.exitCode)} unparseable`;
-  }
-  note("cli-provider-auth-codex-json", cliJsonOk, cliJsonDetail);
-  const summary = { proofDir, serverUrl: state.serverUrl, secretHandling: "invalid token sent but never written to proof; request bodies stored redacted", checks, pass };
+  note(
+    "status-after-codex",
+    rpcOk(afterCodex) && afterCodex.body.result.loggedIn === false,
+    `HTTP ${afterCodex.status}`,
+  );
+  const summary = {
+    proofDir,
+    serverUrl: state.serverUrl,
+    secretHandling:
+      "invalid token sent but never written to proof; request bodies stored redacted",
+    checks,
+    pass,
+  };
   writeJson(join(proofDir, "drive-auth.json"), summary);
   process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
   if (!pass) {
@@ -523,7 +768,14 @@ function runSsh(script, timeoutMs) {
   return new Promise((resolvePromise) => {
     const child = spawn(
       "ssh",
-      ["-o", "BatchMode=yes", "-o", "ConnectTimeout=15", `root@${VPS_HOST}`, script],
+      [
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ConnectTimeout=15",
+        `root@${VPS_HOST}`,
+        script,
+      ],
       { stdio: ["ignore", "pipe", "pipe"] },
     );
     let stdout = "";
@@ -545,7 +797,12 @@ function runSsh(script, timeoutMs) {
     });
     child.on("error", (error) => {
       clearTimeout(timer);
-      resolvePromise({ exitCode: null, stdout, stderr: `${stderr}${error.message}`, timedOut });
+      resolvePromise({
+        exitCode: null,
+        stdout,
+        stderr: `${stderr}${error.message}`,
+        timedOut,
+      });
     });
     child.on("close", (code) => {
       clearTimeout(timer);
@@ -570,19 +827,53 @@ async function cmdVpsDoctor(root) {
       pass = false;
     }
   };
-  const services = await runSsh("systemctl is-active repile.service caddy.service");
-  writeText(join(proofDir, "vps-services.txt"), `$ systemctl is-active\nexit ${String(services.exitCode)}\n${services.stdout}${services.stderr}`);
-  note("vps-services", services.exitCode === 0 && services.stdout.includes("active"), `exit ${String(services.exitCode)}`);
-  const loopback = await runSsh(`curl -s -o /dev/null -w "%{http_code}" ${VPS_LOOPBACK}/; curl -s ${VPS_LOOPBACK}/ | grep -o "<title>[^<]*</title>"`);
-  writeText(join(proofDir, "vps-loopback.txt"), `$ loopback check\nexit ${String(loopback.exitCode)}\n${loopback.stdout}${loopback.stderr}`);
-  note("vps-loopback", loopback.stdout.includes("200") && loopback.stdout.includes("<title>Repile</title>"), loopback.stdout.trim().split("\n").join(" "));
-  const plugin = await runSsh("cd /opt/repile/bb && BB_DATA_DIR=/var/lib/repile node packages/bb-app/dist/bb.js provider-auth status --json 2>&1 | head -c 600");
-  writeText(join(proofDir, "vps-plugin-status.txt"), `$ bb provider-auth status --json\nexit ${String(plugin.exitCode)}\n${plugin.stdout}${plugin.stderr}`);
+  const services = await runSsh(
+    "systemctl is-active repile.service caddy.service",
+  );
+  writeText(
+    join(proofDir, "vps-services.txt"),
+    `$ systemctl is-active\nexit ${String(services.exitCode)}\n${services.stdout}${services.stderr}`,
+  );
+  note(
+    "vps-services",
+    services.exitCode === 0 && services.stdout.includes("active"),
+    `exit ${String(services.exitCode)}`,
+  );
+  const loopback = await runSsh(
+    `curl -s -o /dev/null -w "%{http_code}" ${VPS_LOOPBACK}/; curl -s ${VPS_LOOPBACK}/ | grep -o "<title>[^<]*</title>"`,
+  );
+  writeText(
+    join(proofDir, "vps-loopback.txt"),
+    `$ loopback check\nexit ${String(loopback.exitCode)}\n${loopback.stdout}${loopback.stderr}`,
+  );
+  note(
+    "vps-loopback",
+    loopback.stdout.includes("200") &&
+      loopback.stdout.includes("<title>Repile</title>"),
+    loopback.stdout.trim().split("\n").join(" "),
+  );
+  const plugin = await runSsh(
+    `for id in ${BUNDLED_PLUGIN_IDS.join(" ")}; do curl -s -X POST "${VPS_LOOPBACK}/api/v1/plugins/$id/rpc/subscription.status" -H 'content-type: application/json' -d 'null'; echo; done`,
+  );
+  writeText(
+    join(proofDir, "vps-plugin-status.txt"),
+    `$ loopback rpc subscription.status for ${BUNDLED_PLUGIN_IDS.join(", ")}\nexit ${String(plugin.exitCode)}\n${plugin.stdout}${plugin.stderr}`,
+  );
   let pluginOk = plugin.exitCode === 0;
   try {
-    const parsed = JSON.parse(plugin.stdout);
-    const list = Array.isArray(parsed) ? parsed : [parsed];
-    pluginOk = pluginOk && list.every((entry) => typeof entry.loggedIn === "boolean");
+    const lines = plugin.stdout
+      .trim()
+      .split("\n")
+      .filter((line) => line.length > 0);
+    pluginOk =
+      pluginOk &&
+      lines.length === BUNDLED_PLUGIN_IDS.length &&
+      lines.every((line) => {
+        const parsed = JSON.parse(line);
+        return (
+          parsed.ok === true && typeof parsed.result?.loggedIn === "boolean"
+        );
+      });
   } catch {
     pluginOk = false;
   }
@@ -607,41 +898,158 @@ async function cmdVpsDriveAuth(root) {
       pass = false;
     }
   };
-  const invoke = (route, init) => runSsh(`curl -s -X ${init.method} '${VPS_LOOPBACK}${HTTP_BASE_PATH}${route}${init.query ?? ""}' -H 'content-type: application/json'${init.body ? ` -d '${init.body}'` : ""}`);
-  const start = await invoke("/auth/start", { method: "POST", body: '{"provider":"claude"}' });
-  writeText(join(proofDir, "vps-start-claude.json"), start.stdout);
-  let startedBody = null;
-  try {
-    startedBody = JSON.parse(start.stdout);
-  } catch {
-    startedBody = null;
-  }
-  const startUrl = startedBody !== null && typeof startedBody.url === "string" ? startedBody.url : null;
-  const startOk = start.exitCode === 0 && startedBody !== null && startedBody.state === "awaiting-user" && startUrl !== null && startUrl.startsWith("https://");
-  note("vps-start-claude", startOk, `exit ${String(start.exitCode)} state ${String(startedBody?.state)} urlPresent ${String(startUrl !== null)}`);
-  if (startOk) {
-    const complete = await invoke("/auth/complete", { method: "POST", body: `{"provider":"claude","tokenOrKey":"${INVALID_SECRET}"}` });
-    writeJson(join(proofDir, "vps-complete-invalid.json"), { request: { provider: "claude", tokenOrKey: "***redacted***" }, exit: complete.exitCode, body: complete.stdout.slice(0, 400) });
-    let completedBody = null;
+  const rpc = (pluginId, method, body) =>
+    runSsh(
+      `curl -s -X POST "${VPS_LOOPBACK}/api/v1/plugins/${pluginId}/rpc/${method}" -H 'content-type: application/json' -d '${body}'`,
+    );
+  const parse = (raw) => {
     try {
-      completedBody = JSON.parse(complete.stdout);
+      return JSON.parse(raw.stdout.trim());
     } catch {
-      completedBody = null;
+      return null;
     }
-    note("vps-complete-invalid", completedBody !== null && completedBody.state === "failed" && typeof completedBody.error === "string" && completedBody.error.length > 0, `state ${String(completedBody?.state)}`);
+  };
+  const rpcOk = (parsed) =>
+    parsed !== null &&
+    parsed.ok === true &&
+    parsed.result !== null &&
+    typeof parsed.result === "object";
+
+  const claudeStatus = parse(
+    await rpc(CLAUDE_PLUGIN_ID, "subscription.status", "null"),
+  );
+  writeJson(join(proofDir, "vps-status-claude.json"), claudeStatus);
+  note(
+    "vps-status-claude",
+    rpcOk(claudeStatus) && typeof claudeStatus.result.loggedIn === "boolean",
+    `loggedIn ${String(claudeStatus?.result?.loggedIn)}`,
+  );
+  const codexStatus = parse(
+    await rpc(CODEX_PLUGIN_ID, "subscription.status", "null"),
+  );
+  writeJson(join(proofDir, "vps-status-codex.json"), codexStatus);
+  note(
+    "vps-status-codex",
+    rpcOk(codexStatus) && typeof codexStatus.result.loggedIn === "boolean",
+    `loggedIn ${String(codexStatus?.result?.loggedIn)}`,
+  );
+
+  const start = parse(
+    await rpc(CLAUDE_PLUGIN_ID, "subscription.start", "null"),
+  );
+  writeJson(join(proofDir, "vps-start-claude.json"), start);
+  const startOk =
+    rpcOk(start) &&
+    (start.result.state === "awaiting-user" ||
+      start.result.state === "completed") &&
+    (start.result.state === "completed" ||
+      (typeof start.result.authorizeUrl === "string" &&
+        start.result.authorizeUrl.startsWith("https://")));
+  note("vps-start-claude", startOk, `state ${String(start?.result?.state)}`);
+  if (rpcOk(start) && start.result.state === "awaiting-user") {
+    const complete = parse(
+      await rpc(
+        CLAUDE_PLUGIN_ID,
+        "subscription.complete",
+        `{"sessionId":"${start.result.sessionId}","code":"${INVALID_SECRET}"}`,
+      ),
+    );
+    writeJson(join(proofDir, "vps-complete-invalid.json"), {
+      request: { sessionId: "***redacted***", code: "***redacted***" },
+      response: complete,
+    });
+    note(
+      "vps-complete-invalid",
+      complete !== null &&
+        complete.ok === false &&
+        typeof complete.error?.message === "string" &&
+        complete.error.message.length > 0,
+      `ok ${String(complete?.ok)} error ${String(complete?.error?.message ?? "").slice(0, 80)}`,
+    );
+    const restart = parse(
+      await rpc(CLAUDE_PLUGIN_ID, "subscription.start", "null"),
+    );
+    if (rpcOk(restart) && restart.result.state === "awaiting-user") {
+      const cancel = parse(
+        await rpc(
+          CLAUDE_PLUGIN_ID,
+          "subscription.cancel",
+          `{"sessionId":"${restart.result.sessionId}"}`,
+        ),
+      );
+      writeJson(join(proofDir, "vps-cancel-claude.json"), cancel);
+      note(
+        "vps-cancel-claude",
+        rpcOk(cancel) && cancel.result.cancelled === true,
+        `ok ${String(cancel?.ok)}`,
+      );
+    } else {
+      note(
+        "vps-cancel-claude",
+        true,
+        "skipped: no awaiting-user claude flow on restart",
+      );
+    }
   } else {
-    note("vps-complete-invalid", false, "skipped: start did not reach awaiting-user");
+    note("vps-complete-invalid", true, "skipped: no awaiting-user claude flow");
+    note("vps-cancel-claude", true, "skipped: no awaiting-user claude flow");
   }
-  const glued = "repile-verify-code-123https://claude.com/cai/oauth/authorize?code=true";
-  const malformedBegin = Date.now();
-  const malformed = await invoke("/auth/complete", { method: "POST", body: `{"provider":"claude","tokenOrKey":"${glued}"}` });
-  const malformedElapsed = Date.now() - malformedBegin;
-  writeJson(join(proofDir, "vps-complete-malformed.json"), { request: { provider: "claude", tokenOrKey: "***redacted***" }, elapsedMs: malformedElapsed, exit: malformed.exitCode, body: malformed.stdout.slice(0, 400) });
-  note("vps-complete-malformed", malformed.stdout.includes("only the code") && malformedElapsed < 15000, `elapsedMs ${String(malformedElapsed)}`);
-  const cancel = await invoke("/auth/login", { method: "DELETE", query: "?provider=claude" });
-  writeText(join(proofDir, "vps-cancel-claude.json"), cancel.stdout);
-  note("vps-cancel-claude", cancel.stdout.includes('"cancelled":true'), cancel.stdout.slice(0, 120));
-  const summary = { proofDir, host: VPS_HOST, secretHandling: "invalid token sent but never written to proof; request bodies stored redacted", checks, pass };
+
+  const codexStart = parse(
+    await rpc(CODEX_PLUGIN_ID, "subscription.start", "null"),
+  );
+  writeJson(join(proofDir, "vps-start-codex.json"), codexStart);
+  note(
+    "vps-start-codex",
+    rpcOk(codexStart) &&
+      (codexStart.result.state === "awaiting-user" ||
+        codexStart.result.state === "completed"),
+    `state ${String(codexStart?.result?.state)}`,
+  );
+  if (rpcOk(codexStart) && codexStart.result.state === "awaiting-user") {
+    const poll = parse(
+      await rpc(
+        CODEX_PLUGIN_ID,
+        "subscription.poll",
+        `{"sessionId":"${codexStart.result.sessionId}"}`,
+      ),
+    );
+    writeJson(join(proofDir, "vps-poll-codex.json"), poll);
+    const pollState = poll?.result?.state;
+    note(
+      "vps-poll-codex",
+      rpcOk(poll) &&
+        (pollState === "pending" ||
+          pollState === "failed" ||
+          pollState === "completed"),
+      `state ${String(pollState)}`,
+    );
+    const cancel = parse(
+      await rpc(
+        CODEX_PLUGIN_ID,
+        "subscription.cancel",
+        `{"sessionId":"${codexStart.result.sessionId}"}`,
+      ),
+    );
+    writeJson(join(proofDir, "vps-cancel-codex.json"), cancel);
+    note(
+      "vps-cancel-codex",
+      rpcOk(cancel) && cancel.result.cancelled === true,
+      `ok ${String(cancel?.ok)}`,
+    );
+  } else {
+    note("vps-poll-codex", true, "skipped: no awaiting-user codex flow");
+    note("vps-cancel-codex", true, "skipped: no awaiting-user codex flow");
+  }
+
+  const summary = {
+    proofDir,
+    host: VPS_HOST,
+    secretHandling:
+      "invalid token sent but never written to proof; request bodies stored redacted",
+    checks,
+    pass,
+  };
   writeJson(join(proofDir, "vps-drive-auth.json"), summary);
   process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
   if (!pass) {
@@ -651,11 +1059,17 @@ async function cmdVpsDriveAuth(root) {
 
 async function cmdCleanup(state) {
   const proofDir = state.proofDir;
-  for (const entry of [{ label: "server.log", from: state.serverLog }, { label: "app.log", from: state.appLog }]) {
+  for (const entry of [
+    { label: "server.log", from: state.serverLog },
+    { label: "app.log", from: state.appLog },
+  ]) {
     try {
       copyFileSync(entry.from, join(proofDir, entry.label));
     } catch {
-      writeText(join(proofDir, entry.label), `log unavailable at ${entry.from}\n`);
+      writeText(
+        join(proofDir, entry.label),
+        `log unavailable at ${entry.from}\n`,
+      );
     }
   }
   const stopped = [];
@@ -670,9 +1084,17 @@ async function cmdCleanup(state) {
     rmSync(state.scratch, { recursive: true, force: true });
     scratchRemoved = true;
   } catch (error) {
-    stopped.push({ service: "scratch", action: error instanceof Error ? error.message : String(error) });
+    stopped.push({
+      service: "scratch",
+      action: error instanceof Error ? error.message : String(error),
+    });
   }
-  const report = { proofDir, stopped, scratchRemoved, cleanedAt: new Date().toISOString() };
+  const report = {
+    proofDir,
+    stopped,
+    scratchRemoved,
+    cleanedAt: new Date().toISOString(),
+  };
   writeJson(join(proofDir, "cleanup.json"), report);
   process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
 }
@@ -695,8 +1117,6 @@ async function main() {
   const state = readState(statePath);
   if (args.command === "doctor") {
     await cmdDoctor(state, statePath);
-  } else if (args.command === "install-plugin") {
-    await cmdInstallPlugin(state);
   } else if (args.command === "drive-auth") {
     await cmdDriveAuth(state);
   } else if (args.command === "cleanup") {
@@ -707,6 +1127,8 @@ async function main() {
 }
 
 main().catch((error) => {
-  process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+  process.stderr.write(
+    `${error instanceof Error ? error.message : String(error)}\n`,
+  );
   process.exitCode = 1;
 });

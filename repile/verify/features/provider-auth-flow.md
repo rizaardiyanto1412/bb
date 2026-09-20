@@ -1,22 +1,31 @@
 # Provider auth flow
 
-Provider auth flow signs the Claude and Codex CLIs in from Settings: start a
-login, open the authorize URL (Claude) or paste an API key (Codex), submit the
-secret, and land signed in. Cancelling discards a pending flow.
+Provider auth flow signs the Claude and Codex CLIs in from each provider
+plugin's settings page: Claude opens an authorize URL and takes a pasted
+`code#state`; Codex shows a device code for the verification page or accepts
+an API key. Landing signed in writes the CLI credential files on the bb host.
+Cancelling discards a pending flow.
 
 ## Sub-features
 
-- `flow-start-claude` spawns `claude setup-token` and returns an authorize URL.
-- `flow-start-codex` opens an API-key prompt (no URL) after probing the CLI.
-- `flow-complete-invalid` rejects a bad token or key with a failed session.
-- `flow-complete-human` completes with a real secret (human-gated).
-- `flow-cancel` discards a pending flow and kills its process.
+- `flow-start-claude` returns an `https://` authorize URL (PKCE, manual code).
+- `flow-start-codex` returns a device `userCode` plus `verificationUri`.
+- `flow-poll-codex` reports pending, completes on user approval, or fails.
+- `flow-complete-claude` exchanges a pasted `code#state` for tokens.
+- `flow-key-codex` writes an API key as `auth_mode: "apikey"` credentials.
+- `flow-complete-invalid` rejects bad input with an error, not a crash.
+- `flow-complete-human` completes with a real login (human-gated).
+- `flow-cancel` discards a pending flow.
+- `flow-logout` removes the stored credentials.
 
 ## How to get to it (user POV)
 
-- In Settings → AI providers, choose Login under Claude or Codex.
-- For Claude, open the shown link, authorize, paste the setup token, Submit.
-- For Codex, paste an API key, Submit.
+- In Settings, open the Claude Code or Codex provider plugin's settings page;
+  the Subscription section has Connect, plus Sign out when signed in.
+- For Claude, open the shown authorize link, authorize, paste the `code#state`
+  (or full callback URL), Submit.
+- For Codex, enter the shown code on the verification page, or choose the
+  API-key form and paste a key, Submit.
 - Choose Cancel to discard a pending flow.
 
 ## Driving it with control-repile
@@ -24,41 +33,48 @@ secret, and land signed in. Cancelling discards a pending flow.
 Preconditions:
 
 - A stack was started by `control-repile.mjs launch` in this run.
-- The plugin is installed (`install-plugin`, proven by doctor).
+- The bundled provider plugins are running (proven by doctor).
 - `REPILE_VERIFY_STATE` points at its `run.json`.
 - No human is available; `flow-complete-human` is out of scope for automation.
+- Claude `subscription.start` and `subscription.complete` talk to
+  `claude.ai`/`platform.claude.com`; Codex `subscription.start`/`poll` talk
+  to `auth.openai.com`. The launched server needs outbound network for those
+  calls; status/cancel/logout do not.
 
-- **Start Codex.** Open the API-key prompt path. Run
-  `control-repile.mjs drive-auth`. `start-codex.json` shows HTTP 200 with
-  `awaiting-user` and a null URL, or `completed` when already signed in.
-- **Start Claude.** Open the authorize-URL path. `drive-auth` posts start for
-  `claude`; `start-claude.json` shows HTTP 200 with `awaiting-user` and an
-  `https://` URL, or `completed` when the host is already signed in.
-- **Fail closed.** Submit a bad secret the way the form would. `drive-auth`
-  posts an invalid token for `codex` (always) and for `claude` (when a flow
-  is awaiting-user); the artifacts show HTTP 200 with `state: "failed"` and a
-  non-empty error, proving the server survives bad input without a crash.
-- **Cancel.** Discard both flows. `drive-auth` deletes both logins;
-  `cancel-claude.json` and `cancel-codex.json` show `{ cancelled: true }`,
-  and the after-status pair confirms the instance is still healthy.
+- **Start Codex.** Run `control-repile.mjs drive-auth`. `start-codex.json`
+  shows `ok: true` with `state: "awaiting-user"`, an `https://`
+  `verificationUri`, and a non-empty `userCode`, or `completed` when already
+  signed in.
+- **Poll and cancel Codex.** `poll-codex.json` shows `pending` (or terminal)
+  and `cancel-codex.json` shows `{ cancelled: true }`.
+- **Codex API key.** `login-codex-apikey-invalid.json` shows `ok: true` with
+  `loggedIn: true, mode: "apiKey"`, `status-codex-apikey.json` re-reads it,
+  and `logout-codex.json` returns `loggedIn: false`.
+- **Start Claude.** `start-claude.json` shows `ok: true` with
+  `state: "awaiting-user"` and an `https://` `authorizeUrl`, or `completed`
+  when the host is already signed in.
+- **Fail closed.** `complete-claude-invalid.json` and
+  `complete-claude-malformed.json` show `ok: false` with a non-empty error
+  message, proving the server survives bad input without a crash.
+- **Cancel.** `cancel-claude.json` shows `{ cancelled: true }` for a fresh
+  pending flow, and the after-status pair confirms the instance is still
+  healthy.
 - **Human gate.** `flow-complete-human` is the one human-gated step: a person
-  opens the authorize URL, pastes a real token, and Submits. Automation must
-  report it as not verified, never as verified through the invalid-token
-  path.
+  completes real OAuth or enters a real Codex code. Automation must report it
+  as not verified, never as verified through the invalid-token path.
 - **Proof.** `drive-auth.json` records each check with pass and detail;
   request bodies with secrets are stored redacted.
 
 ## Gotchas
 
-- Starting Claude spawns the real `claude` CLI with a 30s URL timeout; the
-  process stays alive until complete or cancel. Always cancel after starting.
-- `claude setup-token` needs a TTY and dies silent without one. The plugin
-  runs it under a python pty driver on every platform and strips ANSI
-  plus OSC-8 duplication before reading the URL.
+- A failed or succeeded `subscription.complete` consumes the Claude session;
+  `subscription.cancel` on that session returns `cancelled: false`. Start a
+  fresh session to test cancel.
+- Codex device sessions expire (~10 minutes) and the poll interval backs off
+  after `slow_down`; long pauses between manual steps can invalidate a
+  session.
 - Codex performs no key validation at login. An invalid key still completes
-  and a bad key only fails at first real use. Never report the invalid-key
-  path as rejection proof.
-- A `failed` session from a previous step does not block a new start; start
-  replaces the stored session.
-- Terminal sessions are pruned after 5 minutes and pending flows time out
-  after 10; long pauses between manual steps can invalidate a session.
+  and only fails at first real use. Never report the invalid-key path as
+  rejection proof.
+- Starting a new Claude flow replaces any pending session, so earlier
+  sessionIds stop resolving.
