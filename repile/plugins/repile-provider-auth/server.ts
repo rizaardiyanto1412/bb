@@ -18,6 +18,7 @@ import {
   extractAuthorizeUrl,
   lastOutputLine,
   loginSessionSchema,
+  normalizeSetupToken,
   parseClaudeAccountEmail,
   parseClaudeCredentialsFile,
   providerSchema,
@@ -324,6 +325,9 @@ export default async function plugin(bb: BbPluginApi) {
     state: Extract<LoginSessionState, "completed" | "failed">,
     error: string | null,
   ): LoginSession {
+    bb.log.info(
+      `provider-auth ${provider} ${state}${error === null ? "" : ` error=${error}`}`,
+    );
     const previous = sessions.get(provider);
     stopChild(previous?.child ?? null);
     const record = terminalRecord(provider, state, error);
@@ -370,6 +374,7 @@ export default async function plugin(bb: BbPluginApi) {
       updatedAt: Date.now(),
     };
     sessions.set("claude", session);
+    bb.log.info("provider-auth claude flow started");
     const url = await waitForSetupTokenUrl(
       child,
       session,
@@ -394,7 +399,13 @@ export default async function plugin(bb: BbPluginApi) {
     return session.record;
   }
 
-  async function completeClaude(token: string): Promise<LoginSession> {
+  async function completeClaude(rawToken: string): Promise<LoginSession> {
+    const normalized = normalizeSetupToken(rawToken);
+    if (!normalized.ok) {
+      return failStale("claude", normalized.reason ?? "Paste a value first.");
+    }
+    const token = normalized.token;
+    const startedAt = Date.now();
     const session = sessions.get("claude");
     const child = session?.child ?? null;
     if (
@@ -421,6 +432,9 @@ export default async function plugin(bb: BbPluginApi) {
       pollClaudeCredentials(child, LOGIN_EXIT_TIMEOUT_MS),
     ]);
     const { exitCode, timedOut } = closeResult;
+    bb.log.info(
+      `provider-auth claude setup-token exited code=${String(exitCode)} timedOut=${String(timedOut)} elapsedMs=${String(Date.now() - startedAt)}`,
+    );
     const redacted = redactSecret(session.output, token);
     if (credentialAppeared) {
       return storeTerminal("claude", "completed", null);

@@ -467,6 +467,18 @@ async function cmdDriveAuth(state) {
     writeJson(join(proofDir, "complete-claude-invalid.json"), { skipped: "no awaiting-user claude flow (start state: " + String(startClaude.body?.state ?? null) + ")", state: startClaude.body?.state ?? null });
     note("complete-claude-invalid", true, "skipped: start state " + String(startClaude.body?.state ?? null));
   }
+  const malformedStart = await fetchJson(`${base}/auth/start`, { method: "POST", headers: jsonHeaders, body: JSON.stringify({ provider: "claude" }) }, HTTP_TIMEOUT_MS);
+  if (malformedStart.body !== null && malformedStart.body.state === "awaiting-user") {
+    const glued = "repile-verify-code-123https://claude.com/cai/oauth/authorize?code=true";
+    const malformedBegin = Date.now();
+    const malformed = await fetchJson(`${base}/auth/complete`, { method: "POST", headers: jsonHeaders, body: JSON.stringify({ provider: "claude", tokenOrKey: glued }) }, HTTP_TIMEOUT_MS);
+    const malformedElapsed = Date.now() - malformedBegin;
+    writeJson(join(proofDir, "complete-claude-malformed.json"), { request: { provider: "claude", tokenOrKey: "***redacted***" }, elapsedMs: malformedElapsed, status: malformed.status, body: malformed.body });
+    const malformedMsg = malformed.body !== null && typeof malformed.body.error === "string" ? malformed.body.error : "";
+    note("complete-claude-malformed", malformed.status === 200 && malformed.body !== null && malformed.body.state === "failed" && malformedMsg.includes("only the code") && malformedElapsed < 10000, `HTTP ${malformed.status} elapsedMs ${String(malformedElapsed)}`);
+  } else {
+    note("complete-claude-malformed", true, "skipped: no awaiting-user claude flow");
+  }
   for (const provider of ["claude", "codex"]) {
     const cancelled = await fetchJson(`${base}/auth/login?provider=${provider}`, { method: "DELETE", headers: jsonHeaders }, HTTP_TIMEOUT_MS);
     writeJson(join(proofDir, `cancel-${provider}.json`), cancelled);
@@ -620,6 +632,12 @@ async function cmdVpsDriveAuth(root) {
   } else {
     note("vps-complete-invalid", false, "skipped: start did not reach awaiting-user");
   }
+  const glued = "repile-verify-code-123https://claude.com/cai/oauth/authorize?code=true";
+  const malformedBegin = Date.now();
+  const malformed = await invoke("/auth/complete", { method: "POST", body: `{"provider":"claude","tokenOrKey":"${glued}"}` });
+  const malformedElapsed = Date.now() - malformedBegin;
+  writeJson(join(proofDir, "vps-complete-malformed.json"), { request: { provider: "claude", tokenOrKey: "***redacted***" }, elapsedMs: malformedElapsed, exit: malformed.exitCode, body: malformed.stdout.slice(0, 400) });
+  note("vps-complete-malformed", malformed.stdout.includes("only the code") && malformedElapsed < 15000, `elapsedMs ${String(malformedElapsed)}`);
   const cancel = await invoke("/auth/login", { method: "DELETE", query: "?provider=claude" });
   writeText(join(proofDir, "vps-cancel-claude.json"), cancel.stdout);
   note("vps-cancel-claude", cancel.stdout.includes('"cancelled":true'), cancel.stdout.slice(0, 120));

@@ -6,6 +6,7 @@ import {
   jwtExpiryMs,
   lastOutputLine,
   parseClaudeAccountEmail,
+  normalizeSetupToken,
   parseClaudeCredentialsFile,
   stripAnsi,
 } from "./contract.js";
@@ -37,6 +38,28 @@ describe("extractAuthorizeUrl", () => {
     expect(extractAuthorizeUrl(framed)).toBe(
       "https://claude.ai/setup-token/tty-1",
     );
+  });
+});
+
+describe("normalizeSetupToken", () => {
+  it("trims surrounding whitespace", () => {
+    expect(normalizeSetupToken("  abc-123\n")).toEqual({
+      ok: true,
+      token: "abc-123",
+      reason: null,
+    });
+  });
+
+  it("rejects a token with a glued authorize URL", () => {
+    const result = normalizeSetupToken(
+      "abc-123https://claude.com/cai/oauth/authorize?code=true",
+    );
+    expect(result.ok).toBe(false);
+    expect(result.reason ?? "").toContain("only the code");
+  });
+
+  it("rejects blank input", () => {
+    expect(normalizeSetupToken("   ").ok).toBe(false);
   });
 });
 

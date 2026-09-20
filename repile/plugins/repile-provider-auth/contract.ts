@@ -56,6 +56,27 @@ export const completeRequestSchema = z
 
 export type CompleteRequest = z.infer<typeof completeRequestSchema>;
 
+export interface NormalizedToken {
+  ok: boolean;
+  token: string;
+  reason: string | null;
+}
+
+export function normalizeSetupToken(raw: string): NormalizedToken {
+  const token = raw.trim().replace(/\s+/gu, "");
+  if (token.length === 0) {
+    return { ok: false, token: "", reason: "Paste a value first." };
+  }
+  if (token.includes("http://") || token.includes("https://")) {
+    return {
+      ok: false,
+      token: "",
+      reason: "That looks like the authorize page URL. Paste only the code.",
+    };
+  }
+  return { ok: true, token, reason: null };
+}
+
 export const providerStatusSchema = z
   .object({
     provider: providerSchema,
