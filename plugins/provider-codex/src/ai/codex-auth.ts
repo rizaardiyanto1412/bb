@@ -48,11 +48,11 @@ type ClassifiedAuthJson =
   | { state: "unusable"; reason: CodexAuthUnusableReason }
   | { state: "ok"; credentials: CodexAuthCredentials };
 
-function codexAuthPath(): string {
-  return path.join(
-    resolveCodexHome(os.homedir(), process.env),
-    CODEX_AUTH_FILE_NAME,
-  );
+function codexAuthPath(
+  homeDir: string,
+  env: Readonly<Record<string, string | undefined>>,
+): string {
+  return path.join(resolveCodexHome(homeDir, env), CODEX_AUTH_FILE_NAME);
 }
 
 export function toJsonObject(value: JsonValue | undefined): JsonObject | null {
@@ -164,8 +164,11 @@ function classifyAuthJson(value: JsonValue): ClassifiedAuthJson {
   };
 }
 
-export async function readCodexAuthFile(): Promise<CodexAuthFile> {
-  const authPath = codexAuthPath();
+export async function readCodexAuthFile(
+  homeDir: string = os.homedir(),
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): Promise<CodexAuthFile> {
+  const authPath = codexAuthPath(homeDir, env);
   let raw: string;
   try {
     raw = await fs.readFile(authPath, "utf8");

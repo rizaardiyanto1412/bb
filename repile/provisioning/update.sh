@@ -16,6 +16,9 @@ git reset --hard "fork/$BB_BRANCH"
 pnpm install
 pnpm build
 
+# Provider login moved into the bundled provider plugins; drop the standalone one.
+BB_DATA_DIR="$DATA_DIR" node packages/bb-app/dist/bb.js plugin remove repile-provider-auth --yes 2>/dev/null || true
+
 for plugin in "$CODE_DIR"/repile/plugins/*/; do
   [ -f "$plugin/package.json" ] || continue
   (cd "$plugin" && npm install --no-audit --no-fund)

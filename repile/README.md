@@ -6,8 +6,9 @@ WordPress plugin companies and agencies. Living product plan lives in
 
 ## Layout
 
-- `repile/plugins/` — custom bb plugins. Each folder is one plugin, installed on
-  instances via `path:` source for dogfood and `git:` source later.
+- `repile/plugins/` — reserved for custom bb plugins (currently empty; provider
+  subscription login lives inside the bundled `plugins/provider-claude-code`
+  and `plugins/provider-codex` in the bb fork).
 - `repile/provisioning/` — VPS setup and update scripts plus service templates.
 - `.github/workflows/deploy-repile.yml` — push to `main` deploys to the dogfood VPS.
 
