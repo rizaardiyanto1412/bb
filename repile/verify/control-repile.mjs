@@ -46,6 +46,8 @@ function usage() {
     "  install-plugin  Install repile-provider-auth on the launched stack",
     "  drive-auth      Exercise provider-auth without human OAuth",
     "  cleanup         Stop launched processes, keep proof artifacts",
+    "  vps-doctor      Read-only health check of the production VPS",
+    "  vps-drive-auth  Exercise provider-auth on the VPS, no real secrets",
     "",
     "Options:",
     "  --state <path>  Path to run.json (or set REPILE_VERIFY_STATE)",
@@ -500,6 +502,135 @@ async function cmdDriveAuth(state) {
   }
 }
 
+const VPS_HOST = "152.53.82.126";
+const VPS_DOMAIN = "https://repile.rizamaulana.com";
+const VPS_LOOPBACK = "http://127.0.0.1:38886";
+const VPS_SSH_TIMEOUT_MS = 120000;
+
+function runSsh(script, timeoutMs) {
+  return new Promise((resolvePromise) => {
+    const child = spawn(
+      "ssh",
+      ["-o", "BatchMode=yes", "-o", "ConnectTimeout=15", `root@${VPS_HOST}`, script],
+      { stdio: ["ignore", "pipe", "pipe"] },
+    );
+    let stdout = "";
+    let stderr = "";
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        return;
+      }
+    }, timeoutMs ?? VPS_SSH_TIMEOUT_MS);
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString();
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+    child.on("error", (error) => {
+      clearTimeout(timer);
+      resolvePromise({ exitCode: null, stdout, stderr: `${stderr}${error.message}`, timedOut });
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      resolvePromise({ exitCode: code, stdout, stderr, timedOut });
+    });
+  });
+}
+
+function newProofDir(root, prefix) {
+  const runId = `${prefix}-${new Date().toISOString().replace(/[:.]/g, "-")}`;
+  const proofDir = join(root, "proof", runId);
+  mkdirSync(proofDir, { recursive: true });
+  return proofDir;
+}
+
+async function cmdVpsDoctor(root) {
+  const proofDir = newProofDir(root, "vps-doctor");
+  const checks = [];
+  let pass = true;
+  const note = (name, ok, detail) => {
+    if (!checkRecord(checks, name, ok, detail)) {
+      pass = false;
+    }
+  };
+  const services = await runSsh("systemctl is-active repile.service caddy.service");
+  writeText(join(proofDir, "vps-services.txt"), `$ systemctl is-active\nexit ${String(services.exitCode)}\n${services.stdout}${services.stderr}`);
+  note("vps-services", services.exitCode === 0 && services.stdout.includes("active"), `exit ${String(services.exitCode)}`);
+  const loopback = await runSsh(`curl -s -o /dev/null -w "%{http_code}" ${VPS_LOOPBACK}/; curl -s ${VPS_LOOPBACK}/ | grep -o "<title>[^<]*</title>"`);
+  writeText(join(proofDir, "vps-loopback.txt"), `$ loopback check\nexit ${String(loopback.exitCode)}\n${loopback.stdout}${loopback.stderr}`);
+  note("vps-loopback", loopback.stdout.includes("200") && loopback.stdout.includes("<title>Repile</title>"), loopback.stdout.trim().split("\n").join(" "));
+  const plugin = await runSsh("cd /opt/repile/bb && BB_DATA_DIR=/var/lib/repile node packages/bb-app/dist/bb.js provider-auth status --json 2>&1 | head -c 600");
+  writeText(join(proofDir, "vps-plugin-status.txt"), `$ bb provider-auth status --json\nexit ${String(plugin.exitCode)}\n${plugin.stdout}${plugin.stderr}`);
+  let pluginOk = plugin.exitCode === 0;
+  try {
+    const parsed = JSON.parse(plugin.stdout);
+    const list = Array.isArray(parsed) ? parsed : [parsed];
+    pluginOk = pluginOk && list.every((entry) => typeof entry.loggedIn === "boolean");
+  } catch {
+    pluginOk = false;
+  }
+  note("vps-plugin-status", pluginOk, `exit ${String(plugin.exitCode)}`);
+  const pub = await fetchJson(VPS_DOMAIN, {}, HTTP_TIMEOUT_MS);
+  writeJson(join(proofDir, "vps-public.json"), pub);
+  note("vps-public-401", pub.status === 401, `HTTP ${String(pub.status)}`);
+  const summary = { proofDir, host: VPS_HOST, checks, pass };
+  writeJson(join(proofDir, "vps-doctor.json"), summary);
+  process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
+  if (!pass) {
+    throw new Error("vps-doctor failed");
+  }
+}
+
+async function cmdVpsDriveAuth(root) {
+  const proofDir = newProofDir(root, "vps-drive");
+  const checks = [];
+  let pass = true;
+  const note = (name, ok, detail) => {
+    if (!checkRecord(checks, name, ok, detail)) {
+      pass = false;
+    }
+  };
+  const invoke = (route, init) => runSsh(`curl -s -X ${init.method} '${VPS_LOOPBACK}${HTTP_BASE_PATH}${route}${init.query ?? ""}' -H 'content-type: application/json'${init.body ? ` -d '${init.body}'` : ""}`);
+  const start = await invoke("/auth/start", { method: "POST", body: '{"provider":"claude"}' });
+  writeText(join(proofDir, "vps-start-claude.json"), start.stdout);
+  let startedBody = null;
+  try {
+    startedBody = JSON.parse(start.stdout);
+  } catch {
+    startedBody = null;
+  }
+  const startUrl = startedBody !== null && typeof startedBody.url === "string" ? startedBody.url : null;
+  const startOk = start.exitCode === 0 && startedBody !== null && startedBody.state === "awaiting-user" && startUrl !== null && startUrl.startsWith("https://");
+  note("vps-start-claude", startOk, `exit ${String(start.exitCode)} state ${String(startedBody?.state)} urlPresent ${String(startUrl !== null)}`);
+  if (startOk) {
+    const complete = await invoke("/auth/complete", { method: "POST", body: `{"provider":"claude","tokenOrKey":"${INVALID_SECRET}"}` });
+    writeJson(join(proofDir, "vps-complete-invalid.json"), { request: { provider: "claude", tokenOrKey: "***redacted***" }, exit: complete.exitCode, body: complete.stdout.slice(0, 400) });
+    let completedBody = null;
+    try {
+      completedBody = JSON.parse(complete.stdout);
+    } catch {
+      completedBody = null;
+    }
+    note("vps-complete-invalid", completedBody !== null && completedBody.state === "failed" && typeof completedBody.error === "string" && completedBody.error.length > 0, `state ${String(completedBody?.state)}`);
+  } else {
+    note("vps-complete-invalid", false, "skipped: start did not reach awaiting-user");
+  }
+  const cancel = await invoke("/auth/login", { method: "DELETE", query: "?provider=claude" });
+  writeText(join(proofDir, "vps-cancel-claude.json"), cancel.stdout);
+  note("vps-cancel-claude", cancel.stdout.includes('"cancelled":true'), cancel.stdout.slice(0, 120));
+  const summary = { proofDir, host: VPS_HOST, secretHandling: "invalid token sent but never written to proof; request bodies stored redacted", checks, pass };
+  writeJson(join(proofDir, "vps-drive-auth.json"), summary);
+  process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
+  if (!pass) {
+    throw new Error("vps-drive-auth failed");
+  }
+}
+
 async function cmdCleanup(state) {
   const proofDir = state.proofDir;
   for (const entry of [{ label: "server.log", from: state.serverLog }, { label: "app.log", from: state.appLog }]) {
@@ -532,6 +663,14 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.command === "launch") {
     await cmdLaunch(args.root);
+    return;
+  }
+  if (args.command === "vps-doctor") {
+    await cmdVpsDoctor(args.root);
+    return;
+  }
+  if (args.command === "vps-drive-auth") {
+    await cmdVpsDriveAuth(args.root);
     return;
   }
   const statePath = resolveStatePath(args.state);

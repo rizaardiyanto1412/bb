@@ -111,10 +111,14 @@ sequence, all against
   `completed` when already signed in.
 - `POST /auth/start` for `claude`, asserting `awaiting-user` with an `https://`
   authorize URL or `completed` when already signed in.
-- `POST /auth/complete` with an invalid token for `codex` (always) and for
-  `claude` (only when a flow is awaiting-user), asserting HTTP 200 with
-  `state: "failed"` and a non-empty error: a graceful failure, not a crash.
-  Real OAuth completion needs a human and is explicitly out of scope.
+- `POST /auth/complete` with an invalid token for `codex` (always),
+  asserting HTTP 200 with `state: "completed"`: the Codex CLI performs no
+  key validation at login, so the plugin mirrors it and a bad key only
+  fails at first real use. Never report this as rejection proof.
+- `POST /auth/complete` with an invalid token for `claude` (only when a
+  flow is awaiting-user), asserting HTTP 200 with `state: "failed"` and a
+  non-empty error: a graceful failure, not a crash. Real OAuth completion
+  needs a human and is explicitly out of scope.
 - `DELETE /auth/login?provider=...` for both providers, asserting
   `{ cancelled: true }`, then `GET /auth/status` again for both.
 - `bb provider-auth status` (text) asserting exit 0, both provider names
@@ -126,6 +130,22 @@ The feature map in `features/` names every entry point; `drive-auth` covers
 the machine-verifiable ones. The one human-gated step (clicking the authorize
 URL and pasting a real token) is marked in
 `features/provider-auth-flow.md` and is never attempted.
+
+## VPS target
+
+The same flows run against the production VPS without touching local state:
+
+```sh
+node repile/verify/control-repile.mjs vps-doctor
+node repile/verify/control-repile.mjs vps-drive-auth
+```
+
+`vps-doctor` asserts systemd units active, loopback 200 with the Repile
+title, the plugin CLI answering, and public HTTPS returning 401.
+`vps-drive-auth` runs start plus invalid-complete plus cancel for Claude
+over SSH loopback curl and stores redacted evidence in its own proof dir.
+It never submits real secrets and never restarts services. Prefer the
+local target for iteration; use the VPS target to prove what is deployed.
 
 ## Evidence
 
