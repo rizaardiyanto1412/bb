@@ -10,10 +10,12 @@ file as the recipe.
   `REPILE_VERIFY_STATE`. Never drive an instance this run did not start.
 - The developer's own dev instance (whatever ports `pnpm dev` printed) is
   off-limits; the harness probes its own free ports.
-- Run `control-repile.mjs doctor` and require health, app title, and plugin
-  presence before driving.
-- `claude` and `codex` CLIs are expected on `PATH`; the harness inherits
-  `PATH` and redirects their homes to scratch.
+- Run `control-repile.mjs doctor` and require health, app title, and bundled
+  provider plugin presence (`provider-claude-code`, `provider-codex`) before
+  driving.
+- Provider login writes real CLI credential files (`~/.claude/`,
+  `~/.codex/auth.json`) on the bb host; the harness redirects those homes to
+  scratch via `HOME` and `CODEX_HOME`.
 - Real OAuth completion needs a human and is never attempted by automation.
 
 ## Driving conventions
@@ -60,8 +62,6 @@ handles, required state, commands, and observable proof.
 
 - [App shell](./app-shell.md) covers the served web UI and its identity.
 - [Provider auth status](./provider-auth-status.md) covers reading Claude and
-  Codex login state from Settings and the CLI.
+  Codex login state from each provider plugin's Subscription settings.
 - [Provider auth flow](./provider-auth-flow.md) covers starting, failing, and
   cancelling logins, plus the human-gated OAuth step.
-- [Plugin install](./plugin-install.md) covers installing the plugin from a
-  path source onto an instance.

@@ -4,7 +4,8 @@
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "bundler",
-    "lib": ["ES2022", "DOM"],
+    "jsx": "react-jsx",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "noEmit": true,
     "skipLibCheck": true,
     "paths": {
@@ -17,5 +18,5 @@
     },
     "types": ["node"]
   },
-  "include": ["server.ts", "src", "vitest.config.ts"]
+  "include": ["server.ts", "app.tsx", "contract.ts", "src", "vitest.config.ts"]
 }

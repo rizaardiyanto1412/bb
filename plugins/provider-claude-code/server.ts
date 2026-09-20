@@ -1,3 +1,4 @@
+import { registerClaudeAuth } from "./src/login/register.js";
 import { registerUsageSource } from "./src/usage-source.js";
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import {
@@ -9,6 +10,7 @@ import { CLAUDE_NATIVE_ROOTS_DECLARATION } from "./src/native-roots.js";
 
 export default function plugin(bb: BbPluginApi) {
   registerUsageSource(bb);
+  registerClaudeAuth(bb);
   bb.settings.define({
     memoryEnabled: {
       type: "boolean",

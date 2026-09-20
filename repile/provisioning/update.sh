@@ -7,6 +7,10 @@ BB_BRANCH="${BB_BRANCH:-main}"
 CODE_DIR="/opt/repile/bb"
 DATA_DIR="/var/lib/repile"
 
+export DEBIAN_FRONTEND=noninteractive
+apt-get update
+apt-get install -y bubblewrap
+
 cd "$CODE_DIR"
 git remote remove origin 2>/dev/null || true
 git remote set-url fork bb-gh:rizaardiyanto1412/repile.git 2>/dev/null || git remote add fork bb-gh:rizaardiyanto1412/repile.git
@@ -15,6 +19,9 @@ git checkout -B "$BB_BRANCH" "fork/$BB_BRANCH"
 git reset --hard "fork/$BB_BRANCH"
 pnpm install
 pnpm build
+
+# Provider login moved into the bundled provider plugins; drop the standalone one.
+BB_DATA_DIR="$DATA_DIR" node packages/bb-app/dist/bb.js plugin remove repile-provider-auth --yes 2>/dev/null || true
 
 for plugin in "$CODE_DIR"/repile/plugins/*/; do
   [ -f "$plugin/package.json" ] || continue
