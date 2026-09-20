@@ -8,6 +8,7 @@ CODE_DIR="/opt/repile/bb"
 DATA_DIR="/var/lib/repile"
 
 export DEBIAN_FRONTEND=noninteractive
+apt-get update
 apt-get install -y bubblewrap
 
 cd "$CODE_DIR"
