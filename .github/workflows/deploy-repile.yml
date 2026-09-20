@@ -2,7 +2,7 @@ name: deploy-repile
 
 on:
   push:
-    branches: [repile]
+    branches: [main]
     paths-ignore:
       - "**.md"
   workflow_dispatch: {}

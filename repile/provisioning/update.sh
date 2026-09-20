@@ -3,7 +3,7 @@
 # Single repo: the bb fork checkout at /opt/repile/bb carries repile/ inside.
 set -euo pipefail
 
-BB_BRANCH="${BB_BRANCH:-repile}"
+BB_BRANCH="${BB_BRANCH:-main}"
 CODE_DIR="/opt/repile/bb"
 DATA_DIR="/var/lib/repile"
 
@@ -11,7 +11,7 @@ cd "$CODE_DIR"
 git remote remove origin 2>/dev/null || true
 git remote set-url fork bb-gh:rizaardiyanto1412/repile.git 2>/dev/null || git remote add fork bb-gh:rizaardiyanto1412/repile.git
  git fetch fork "$BB_BRANCH" --depth 50
-git checkout "$BB_BRANCH"
+git checkout -B "$BB_BRANCH" "fork/$BB_BRANCH"
 git reset --hard "fork/$BB_BRANCH"
 pnpm install
 pnpm build
